@@ -133,6 +133,9 @@
   .foot{margin-top:14px;font-size:11.5px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
   .foot b{color:var(--muted);font-weight:600}
   .foot .tag{color:var(--mut);font-size:11px;letter-spacing:.04em}
+  .foot .made{margin-left:auto;font-size:11.5px;color:var(--mut)}
+  .foot a.nwinn{color:#2f6bff;font-weight:700;text-decoration:none}
+  .foot a.nwinn:hover{color:#4d86ff;text-decoration:underline}
 
   /* ── lifetime charts (self-contained SVG, Grafana-style) ── */
   .lifegraph{width:100%;height:150px;position:relative;background:#0a0d13;border:1px solid #1d2434;border-radius:8px;overflow:hidden}
@@ -180,7 +183,7 @@
       <div class="v" style="color:#ff5c8a" id="tps">—</div>
       <div class="s" id="tps-sub">tok/s · live</div>
     </div>
-    <div class="tile" data-metric="prefill" data-color="#ffa254" title="prefill speed — how fast the model reads the prompt in (tokens/sec). Your 3090 runs this around 800–900 t/s. Higher = faster first token (TTFT).">
+    <div class="tile" data-metric="prefill" data-color="#ffa254" title="prefill speed — how fast the model reads the prompt in (tokens/sec). Depends entirely on your own GPU. Higher = faster first token (TTFT).">
       <div class="spark"></div>
       <div class="k" style="color:#ffa254">prefill</div>
       <div class="v" style="color:#ffa254" id="prefill">—</div>
@@ -198,11 +201,11 @@
       <div class="v" style="color:#4dd0c4" id="acc">—</div>
       <div class="s" id="acc-sub">accepted / rejected</div>
     </div>
-    <div class="tile" data-metric="gpu_util" data-color="#2ea043" title="GPU utilisation — % of the RTX 3090's compute in use, sampled every few seconds.">
+    <div class="tile" data-metric="gpu_util" data-color="#2ea043" title="GPU utilisation — % of your GPU's compute in use, sampled every few seconds. The card name is auto-detected.">
       <div class="spark"></div>
       <div class="k" style="color:#2ea043">gpu util</div>
       <div class="v" style="color:#2ea043" id="gutil">—</div>
-      <div class="s" id="gutil-sub">rtx 3090</div>
+      <div class="s" id="gutil-sub">gpu</div>
     </div>
     <div class="tile" data-metric="vram_pct" data-color="#3ddc84" data-fixed="0,100" title="VRAM used by the model (GB). Sparkline is pinned to the full 0–100% scale so you can see headroom at a glance.">
       <div class="spark"></div>
@@ -227,7 +230,7 @@
   <!-- ── progress strip ── -->
   <div class="card" style="margin-bottom:12px">
     <div class="barnote">
-      <span id="proglabel" title="progress = tokens generated ÷ (prompt + output) for the current request — live from LM Studio's runtime stream. 'prefill' is the prompt-read speed (your ~800–900 t/s).">prompt processing</span>
+      <span id="proglabel" title="progress = tokens generated ÷ (prompt + output) for the current request — live from LM Studio's runtime stream. 'prefill' is the prompt-read speed.">prompt processing</span>
       <span id="progval">idle</span>
     </div>
     <div class="bar big" title="How far along the current request is. Fills left→right as the model reads the prompt and generates. Resets each request."><i id="progbar" style="width:0%;background:var(--cyan)"></i></div>
@@ -325,7 +328,7 @@
       </div>
       <div class="ctl" style="margin-top:10px">
         <button class="mini on" id="btnSaveSettings">save settings</button>
-        <button class="mini" id="btnResetSettings" title="revert to the built-in defaults (11¢/65W/3.2/13.8/110W/30d)">reset</button>
+        <button class="mini" id="btnResetSettings" title="revert to the built-in defaults (US avg 18.34¢/65W/3.2/13.8/110W/30d)">reset</button>
       </div>
       <div class="hnote">applies live. <b>$ saved</b> only counts time the GPU is above the idle threshold — parked/idle time doesn't inflate it.</div>
     </div>
@@ -348,7 +351,7 @@
     <span><b>source</b> <span class="key">lms log stream</span> (model+runtime) + <span class="key">nvidia-smi</span> + <span class="key">psutil</span> · read-only · no token</span>
     <span><b>server</b> <span id="footserver">127.0.0.1:1234</span></span>
     <span><b>viewport</b> :18022</span>
-    <span style="margin-left:auto" class="tag">LM Studio Telemetry Viewport</span>
+    <span class="made">Made by <a class="nwinn" href="https://github.com/NWinnVR" target="_blank" rel="noopener">NWinn</a></span>
   </div>
 </div>
 
@@ -463,9 +466,10 @@ async function tick(){
   const g=st.gpu;
   if(g){
     set("gutil",g.util_pct+"%");
+    set("gutil-sub", g.name ? g.name.toLowerCase() : "gpu");
     set("vram",(g.vram_used_mb/1024).toFixed(1)+" GB"); set("vram-sub","of "+(g.vram_total_mb/1024).toFixed(0)+" GB");
     set("temp",g.temp_c+"°"); set("temp-sub",g.power_w.toFixed(0)+" W draw");
-  } else { set("gutil","—"); set("vram","—"); set("vram-sub","nvidia-smi n/a"); set("temp","—"); set("temp-sub",""); }
+  } else { set("gutil","—"); set("gutil-sub","gpu"); set("vram","—"); set("vram-sub","nvidia-smi n/a"); set("temp","—"); set("temp-sub",""); }
   const r=st.ram;
   if(r){ set("ram",r.pct+"%"); set("ram-sub",(r.used_mb/1024).toFixed(1)+" / "+(r.total_mb/1024).toFixed(0)+" GB"); }
   else { set("ram","—"); set("ram-sub","psutil n/a"); }
@@ -816,7 +820,7 @@ async function hist(){
 $("btnHistToday").onclick=()=>{ histDays=1; hist(); toast("showing today","ok"); };
 
 /* ───────────────────────── settings panel ───────────────────────── */
-const SG_DEFAULTS={ cost_per_kwh:0.11, cpu_w:65, frontier_in:3.2, frontier_out:13.8, idle_power_w:110, lifetime_days:30 };
+const SG_DEFAULTS={ cost_per_kwh:0.1834, cpu_w:65, frontier_in:3.2, frontier_out:13.8, idle_power_w:110, lifetime_days:30 };
 let sgLoaded=false;
 async function loadSettings(){
   let s;
@@ -831,7 +835,7 @@ async function loadSettings(){
 }
 $("btnSaveSettings").onclick=async()=>{
   const payload={
-    cost_per_kwh:+$("sg_cost").value/100||0.11,
+    cost_per_kwh:+$("sg_cost").value/100||0.1834,
     cpu_w:+$("sg_cpuw").value||65,
     frontier_in:+$("sg_fin").value||3.2,
     frontier_out:+$("sg_fout").value||13.8,
@@ -845,8 +849,8 @@ $("btnSaveSettings").onclick=async()=>{
   }catch(e){ toast("save failed: "+e.message,"err"); }
 };
 $("btnResetSettings").onclick=()=>{
-  if(!confirm("Reset all settings to defaults?\n  rate 11¢/kWh · cpu 65W · frontier $3.2/$13.8 · idle 110W · retain 30d")) return;
-  $("sg_cost").value=11; $("sg_cpuw").value=65; $("sg_fin").value=3.2; $("sg_fout").value=13.8; $("sg_idle").value=110; $("sg_days").value=30;
+  if(!confirm("Reset all settings to defaults?\n  rate 18.34¢/kWh (US avg) · cpu 65W · frontier $3.2/$13.8 · idle 110W · retain 30d")) return;
+  $("sg_cost").value=18.34; $("sg_cpuw").value=65; $("sg_fin").value=3.2; $("sg_fout").value=13.8; $("sg_idle").value=110; $("sg_days").value=30;
   $("btnSaveSettings").click();
 };
 
@@ -884,7 +888,7 @@ async function tickTotals(){
   // all-time electricity cost pill
   if(t.all_cost!=null){
     set("allcostv", money(t.all_cost));
-    $("allcost").title="all-time electricity cost at "+((t.rate||0.11)*100).toFixed(2)+"¢/kWh · "+(t.all_kwh!=null?t.all_kwh.toFixed(2):"—")+" kWh · GPU draw (measured) + ~"+(t.cpu_w!=null?Math.round(t.cpu_w):65)+"W CPU estimate · active "+(t.active_hours!=null?t.active_hours.toFixed(1):"—")+"h of "+(t.total_hours!=null?t.total_hours.toFixed(1):"—")+"h uptime";
+    $("allcost").title="all-time electricity cost at "+((t.rate||0.1834)*100).toFixed(2)+"¢/kWh · "+(t.all_kwh!=null?t.all_kwh.toFixed(2):"—")+" kWh · GPU draw (measured) + ~"+(t.cpu_w!=null?Math.round(t.cpu_w):65)+"W CPU estimate · active "+(t.active_hours!=null?t.active_hours.toFixed(1):"—")+"h of "+(t.total_hours!=null?t.total_hours.toFixed(1):"—")+"h uptime";
   }
   // $ saved pill (frontier API cost for the same tokens − local electricity)
   if(t.saved!=null){

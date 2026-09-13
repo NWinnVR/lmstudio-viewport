@@ -6,7 +6,7 @@
 
 `Python` · `no API token` · `no second model` · `local-only` · `MIT`
 
-[![version](https://img.shields.io/badge/version-1.0.0-22d3ee)]()
+[![version](https://img.shields.io/badge/version-1.1.0-22d3ee)]()
 [![python](https://img.shields.io/badge/python-3.8+-3776ab)]()
 [![license](https://img.shields.io/badge/license-MIT-2dd484)]()
 
@@ -94,7 +94,7 @@ the number:
 | **Prefill** | how fast the prompt is read in (tokens/sec) |
 | **Context this turn** | tokens in this generation + your max context window |
 | **Draft acceptance** | spec-decoding: % of draft tokens the big model accepted |
-| **GPU util** | nvidia-smi utilization % |
+| **GPU util** | nvidia-smi utilization % — the **card name is auto-detected** (your GPU, not a hardcoded one) |
 | **VRAM** | memory in use / total |
 | **Temp · ⚡ Draw** | GPU temperature + live power draw (the only tile with the bolt) |
 | **System RAM** | via `psutil` (optional) |
@@ -110,7 +110,7 @@ It reads `idle` between prompts and fills while a long prompt is being read in.
 ### Lifetime charts · the long view
 ![lifetime](docs/lifetime.png)
 
-Four Grafana-style line charts over any range (**1m / 10m / 1h / 1d / 7d / all**),
+Four line charts over any range (**1m / 10m / 1h / 1d / 7d / all**),
 each with avg + peak in the legend:
 
 - **Inference performance** — decode + prefill + draft acceptance
@@ -181,7 +181,7 @@ It binds to **127.0.0.1 only** — nothing is exposed to your network.
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `cost_per_kwh` | `0.11` | your electricity rate, $/kWh |
+| `cost_per_kwh` | `0.1834` | your electricity rate, $/kWh — **defaults to the US national residential average** (EIA, ~18.34¢ as of mid-2026); set it to your real rate in the Settings panel |
 | `cpu_w` | `65.0` | flat CPU+platform wattage estimate (not meterable on Windows) |
 | `frontier_in` | `3.2` | avg frontier API input price, $/M tokens (for `$ saved`) |
 | `frontier_out` | `13.8` | avg frontier API output price, $/M tokens |
@@ -234,6 +234,19 @@ docs/                   README screenshots
 
 Ideas, PRs, and issues are welcome. Bump the version in `dashboard.py`
 (`VERSION`) for any change — minor for fixes/adds, major only on explicit intent.
+
+## Credits
+
+- **LM Studio** — the local inference server whose logs this reads (made by
+  [LM Studio](https://lmstudio.ai)).
+- **Grafana** — the multi-axis, color-coded time-series *layout* here follows
+  [Grafana](https://grafana.com)'s dashboard conventions. **No Grafana code is
+  included or linked**; this is a self-contained re-implementation of that
+  look. (Grafana is distributed under **AGPL-3.0**, which only applies if you
+  incorporate its code — we don't, so it carries no obligations here.)
+- **EIA** — US electricity-rate average used as the default `cost_per_kwh`
+  ([Energy Information Administration](https://www.eia.gov/electricity/data/browser/)).
+- **NWinn** — author (VR: nwinn). Attribution link is in the dashboard footer.
 
 ## License
 

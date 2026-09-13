@@ -56,7 +56,7 @@ PORT = int(os.environ.get("VIEWPORT_PORT", "18022"))
 # Single source of truth for the release version (semver). Bump here; it is
 # surfaced via /api/status and in the README. Policy: minor bump for fixes/adds,
 # major only on explicit intent.
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
 LIFETIME = os.path.join(HERE, "lifetime.jsonl")
@@ -71,7 +71,7 @@ PROCESS_START = time.time()
 #
 # These are LIVE-TWEAKABLE: they persist to settings.json and are editable from
 # the dashboard's settings panel. `CFG` is the single source of truth at runtime.
-COST_PER_KWH   = 0.11    # $/kWh (11¢)
+COST_PER_KWH   = 0.1834  # $/kWh — US national residential average (EIA, Sep 2026). Set yours in the settings panel.
 CPU_W_ESTIMATE = 65.0    # W — flat CPU+platform estimate (not meterable on Windows)
 FRONTIER_IN    = 3.2     # $/M input tokens (avg frontier workhorse)
 FRONTIER_OUT   = 13.8    # $/M output tokens
@@ -202,11 +202,21 @@ def gpu_stats():
         parts = [x.strip() for x in (p.stdout or b"").decode().strip().split(",")]
         if len(parts) < 5:
             return None
-        return {"util_pct": int(parts[0]), "vram_used_mb": int(parts[1]),
-                "vram_total_mb": int(parts[2]), "temp_c": int(parts[3]),
-                "power_w": float(parts[4])}
+        out = {"util_pct": int(parts[0]), "vram_used_mb": int(parts[1]),
+               "vram_total_mb": int(parts[2]), "temp_c": int(parts[3]),
+               "power_w": float(parts[4])}
     except Exception:
         return None
+    # Auto-detect the GPU's NAME (portable — never assume a specific card).
+    try:
+        np = subprocess.run([exe, "--query-gpu=name", "--format=csv,noheader"],
+                           capture_output=True, timeout=10, creationflags=NO_WINDOW)
+        nm = (np.stdout or b"").decode().strip().splitlines()
+        if nm and nm[0].strip():
+            out["name"] = nm[0].strip()
+    except Exception:
+        pass
+    return out
 
 
 def ram_stats():
