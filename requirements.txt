@@ -1,0 +1,7 @@
+# LM Studio Telemetry Viewport — dependencies
+#
+# The dashboard is stdlib-first and runs with ZERO required packages.
+# psutil is OPTIONAL: it enables the "system RAM" tile. Without it, that one
+# tile is hidden and everything else works.
+
+psutil>=5.9

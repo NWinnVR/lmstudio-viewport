@@ -1,0 +1,32 @@
+# LM Studio Telemetry Viewport
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime state (never ship data)
+viewport.log
+history.jsonl
+lifetime.jsonl
+state.json
+comb.jsonl
+raw_model.jsonl
+rt_*.log
+rt_*.jsonl
+rt_*.err
+ledger.json
+settings.json
+archive/
+
+# Local tooling / scratch
+.spark.txt
+_spark.txt
+.venv/
+venv/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# local screenshot tool (not shipped)
+_shot.py

@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LM Viewport</title>
+<style>
+  :root{
+    --bg:#0d1017; --panel:#151a24; --panel2:#1b2130; --border:#262e40;
+    --fg:#e8ecf4; --muted:#8b94a8; --dim:#5a6378;
+    --green:#3ddc84; --amber:#ffb454; --red:#ff5c5c; --gray:#7a8299;
+    --cyan:#4dd0c4; --violet:#b48cff; --orange:#ffa254; --blue:#5aa9ff;
+    --mono:ui-monospace,Cascadia Code,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.45 "Segoe UI",system-ui,sans-serif;padding:14px}
+  .wrap{max-width:1240px;margin:0 auto}
+
+  /* ── top bar ── */
+  .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .title{font-weight:700;font-size:17px;letter-spacing:.3px}
+  .title .dim{color:var(--muted);font-weight:400;font-size:13px}
+  .pill{display:inline-flex;align-items:center;gap:7px;padding:4px 12px;border-radius:999px;
+    font-size:12.5px;font-weight:600;border:1px solid var(--border);background:var(--panel)}
+  .pill .dot{width:9px;height:9px;border-radius:50%;background:var(--gray)}
+  .pill.ok{color:var(--green);border-color:rgba(61,220,132,.4)} .pill.ok .dot{background:var(--green);box-shadow:0 0 8px var(--green)}
+  .pill.off{color:var(--red);border-color:rgba(255,92,92,.4)} .pill.off .dot{background:var(--red)}
+  .pill.busy{color:var(--cyan);border-color:rgba(77,208,196,.4)} .pill.busy .dot{background:var(--cyan);animation:pulse 1.1s infinite}
+  .pill.cost{color:#3ddc84;border-color:rgba(61,220,132,.35);background:rgba(61,220,132,.05)}
+  .pill.cost b{color:var(--fg);font-weight:600}
+  @keyframes pulse{50%{opacity:.35}}
+  .spacer{flex:1}
+  #modelname{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  .btn{appearance:none;border:1px dashed var(--border);background:transparent;color:var(--muted);
+    padding:6px 13px;border-radius:9px;font-size:12.5px;font-weight:600;cursor:pointer}
+  .btn:hover{color:var(--fg);border-color:var(--blue)}
+  .btn .spin{display:inline-block;width:11px;height:11px;border:2px solid currentColor;
+    border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;margin-right:6px;vertical-align:-1px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ── stat tiles (with background sparkline) ── */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px}
+  .tile{position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--border);
+    border-radius:11px;padding:10px 13px;min-height:82px}
+  .tile svg.spark{position:absolute;inset:0;width:100%;height:100%;opacity:.34;pointer-events:none}
+  .tile .k{position:relative;z-index:2;font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted)}
+  .tile .v{position:relative;z-index:2;font-family:var(--mono);font-size:23px;font-weight:600;margin-top:3px;text-shadow:0 1px 6px rgba(13,16,23,.9)}
+  .tile .s{position:relative;z-index:2;font-size:11.5px;color:var(--muted);margin-top:2px;font-family:var(--mono)}
+  .c-cyan{color:var(--cyan)} .c-violet{color:var(--violet)} .c-orange{color:var(--orange)}
+  .c-blue{color:var(--blue)} .c-green{color:var(--green)} .c-amber{color:var(--amber)} .c-red{color:var(--red)}
+  .live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);
+    box-shadow:0 0 7px var(--green);margin-left:7px;vertical-align:2px;opacity:.25}
+  .tile.is-live .live{opacity:1;animation:livepulse 1s ease-in-out infinite}
+  @keyframes livepulse{50%{opacity:.3;transform:scale(.8)}}
+  .bar{position:relative;z-index:2;height:6px;border-radius:4px;background:#232b3d;margin-top:8px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:4px;transition:width .4s}
+  .bar.big{height:10px;margin-top:10px}
+  .barnote{position:relative;z-index:2;font-size:11px;color:var(--muted);margin-top:5px;font-family:var(--mono);display:flex;justify-content:space-between}
+
+  /* ── grids ── */
+  .grid{display:grid;grid-template-columns:1.5fr 1fr;gap:10px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:12px}
+  .card h3{margin:0 0 9px;font-size:12px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+    color:var(--muted);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .card h3 .tag{margin-left:auto;font-size:10.5px;font-family:var(--mono);color:var(--dim);text-transform:none;letter-spacing:0}
+  #feed{height:360px;overflow-y:auto;font:11.5px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;
+    background:#0a0d13;border-radius:8px;padding:9px 11px;border:1px solid #1d2434}
+  .ev{padding:6px 8px;border-radius:7px;margin-bottom:5px;border-left:3px solid var(--green);background:#0d121c}
+  .ev .ts{color:var(--cyan);opacity:.85;margin-right:8px}
+  .ev .m{color:var(--dim);font-size:10.5px}
+  .ev .row{display:flex;gap:14px;flex-wrap:wrap;margin-top:3px}
+  .ev .row span{font-family:var(--mono)}
+  .ev .lbl{color:var(--dim);text-transform:uppercase;font-size:9.5px;letter-spacing:.5px;margin-right:4px}
+  .ev .tps{color:var(--cyan);font-weight:700} .ev .ttft{color:var(--violet)}
+  .ev .acc{color:var(--green)} .ev .rej{color:var(--red)}
+  .ev .stop{color:var(--dim);font-size:10px}
+  .ev .pref{color:var(--orange);font-weight:700}
+  .ev.hit{background:rgba(77,208,196,.12);border-left-color:var(--cyan)}
+  .ctl{display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap}
+  #filter{flex:1;min-width:120px;background:#0a0d13;border:1px solid var(--border);color:var(--fg);
+    border-radius:8px;padding:5px 9px;font:11.5px var(--mono)}
+  #filter:focus{outline:none;border-color:var(--blue)}
+  .mini{appearance:none;border:1px solid var(--border);background:transparent;color:var(--muted);
+    padding:3px 10px;border-radius:7px;font-size:11.5px;cursor:pointer}
+  .mini:hover{color:var(--fg);border-color:var(--blue)}
+  .mini.on{color:var(--cyan);border-color:rgba(77,208,196,.5)}
+  /* ── settings / data panels (bottom row) ── */
+  .kvrow{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .kvrow .field{display:flex;flex-direction:column;gap:3px}
+  .kvrow .field.full{grid-column:1/-1}
+  .kvrow .field label{font-size:10.5px;font-weight:600;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+  .kvrow input[type=number]{width:100%;background:#0a0d13;border:1px solid var(--border);color:var(--fg);
+    border-radius:7px;padding:5px 9px;font:12px var(--mono)}
+  .kvrow input:focus{outline:none;border-color:var(--blue)}
+  .datarow{display:flex;justify-content:space-between;align-items:center;font:11.5px var(--mono);
+    padding:4px 0;border-bottom:1px solid #1a2130}
+  .datarow:last-of-type{border-bottom:0}
+  .datarow .k{color:var(--muted)} .datarow .v{color:var(--fg)}
+  .datarow .v.big{color:var(--green)}
+  .empty{color:var(--dim);font-style:italic;padding:8px}
+  .hnote{font-size:11px;color:var(--dim);margin-top:8px}
+  .hnote b{color:var(--muted)}
+  .key{font-family:var(--mono);background:#0a0d13;padding:1px 6px;border-radius:5px;border:1px solid #1d2434}
+
+  /* ── lifetime ── */
+  .lifewrap{margin-bottom:16px}
+  .lifesegbar{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    flex-wrap:wrap;padding:2px 4px 8px}
+  .lifeseglabel{font-size:12px;color:var(--muted);font-family:var(--mono)}
+  .lifeseglabel b{color:var(--fg);font-weight:600}
+  .lifeseg{display:inline-flex;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .lifeseg button{appearance:none;border:0;background:transparent;color:var(--muted);padding:4px 12px;font-size:12px;font-family:var(--mono);cursor:pointer}
+  .lifeseg button.on{background:var(--panel2);color:var(--cyan)}
+  .legend{display:flex;gap:16px;font-size:11px;font-family:var(--mono);color:var(--muted);margin-bottom:6px;flex-wrap:wrap}
+  .legend .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+  .lifestat{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px;color:var(--muted);padding:2px 2px 4px}
+  .lifestat b{color:var(--fg);font-weight:600}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11.5px}
+  th{color:var(--dim);text-align:right;font-weight:600;font-size:10px;letter-spacing:.5px;
+    text-transform:uppercase;padding:4px 6px;border-bottom:1px solid var(--border)}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:5px 6px;text-align:right;border-bottom:1px solid #1a2130;color:var(--fg)}
+  td.d{color:var(--muted)}
+
+  .toast{position:fixed;bottom:18px;right:18px;background:var(--panel2);border:1px solid var(--border);
+    padding:11px 16px;border-radius:10px;font-size:13px;max-width:420px;opacity:0;transform:translateY(8px);
+    transition:.25s;pointer-events:none;z-index:9}
+  .toast.show{opacity:1;transform:none}
+  .toast.err{border-color:rgba(255,92,92,.5);color:var(--red)}
+  .toast.ok{border-color:rgba(61,220,132,.5);color:var(--green)}
+  .foot{margin-top:14px;font-size:11.5px;color:var(--dim);display:flex;gap:14px;flex-wrap:wrap}
+  .foot b{color:var(--muted);font-weight:600}
+  .foot .tag{color:var(--mut);font-size:11px;letter-spacing:.04em}
+
+  /* ── lifetime charts (self-contained SVG, Grafana-style) ── */
+  .lifegraph{width:100%;height:150px;position:relative;background:#0a0d13;border:1px solid #1d2434;border-radius:8px;overflow:hidden}
+  .lc-svg{width:100%;height:100%;display:block}
+  .lc-grid{stroke:#222b3d;stroke-width:1}
+  .lc-axis{stroke:#3a465f;stroke-width:1}
+  .lc-ylab,.lc-xlab{fill:#7f8aa3;font:10.5px var(--mono)}
+  .lc-xh{stroke:#aab4cc;stroke-width:1;stroke-dasharray:4 3}
+  .lc-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-style:italic;font-size:12px}
+  .lc-tip{position:absolute;pointer-events:none;z-index:5;background:rgba(17,21,30,.96);border:1px solid var(--border);
+    border-radius:8px;padding:7px 10px;min-width:150px;box-shadow:0 6px 20px rgba(0,0,0,.45);backdrop-filter:blur(2px)}
+  .lc-when{color:var(--fg);font:600 11px var(--mono);margin-bottom:5px;padding-bottom:4px;border-bottom:1px solid #262e40}
+  .lc-row{display:flex;align-items:center;gap:7px;font:11.5px var(--mono);margin-top:3px}
+  .lc-sw{width:9px;height:9px;border-radius:2px;flex:none}
+  .lc-name{color:var(--muted);flex:1}
+  .lc-val{color:var(--fg);font-weight:600}
+  .spark{position:absolute;inset:0;width:100%;height:100%;opacity:.5;pointer-events:none;z-index:1}
+  .spark svg{width:100%;height:100%;display:block}
+  .tokpill{font-family:var(--mono);font-size:12.5px;color:var(--cyan);border:1px solid rgba(77,208,196,.35);
+    background:rgba(77,208,196,.06);padding:4px 11px;border-radius:999px;white-space:nowrap}
+  .tokpill b{color:var(--fg);font-weight:600}
+  @media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top">
+    <div class="title">LM Viewport</div>
+    <span id="pill" class="pill"><span class="dot"></span><span id="pilltxt">…</span></span>
+    <span id="modelname"></span>
+    <span id="uptime" style="font-family:var(--mono);font-size:12.5px;color:var(--green);border:1px solid rgba(61,220,132,.35);background:rgba(61,220,132,.06);padding:4px 11px;border-radius:999px" title="how long the model has been loaded">⏱ <span id="uptimev">—</span></span>
+    <span id="tokall" class="tokpill" title="total tokens processed across every generation ever recorded on this box — includes every Hermes turn, CLI session, and anything else that hit the server">Tok/all: <b id="tokallv">—</b></span>
+    <span id="allcost" class="pill cost" title="all-time electricity cost — GPU draw (measured via nvidia-smi) + a flat CPU+platform estimate, integrated over every sample since first launch. Survives restarts and compaction.">$: <b id="allcostv">—</b></span>
+    <span id="saved" class="pill cost" title="estimated savings vs running the same tokens on an average frontier API. Counts only while the model was actively working (GPU draw above the idle threshold), so parked/idle time doesn't inflate it.">$ Saved: <b id="savedv">—</b></span>
+    <div class="spacer"></div>
+    <button id="btnExit" class="btn" title="close the viewport (the model/server keeps running)">✖</button>
+  </div>
+
+  <!-- ── live tiles, each with a background time-graph ── -->
+  <div class="stats">
+    <div class="tile" data-metric="decode" data-color="#ff5c8a" title="live decode speed — tokens generated per second while the model is producing output. Pulses while generating.">
+      <div class="spark"></div>
+      <div class="k" style="color:#ff5c8a">decode speed<span class="live"></span></div>
+      <div class="v" style="color:#ff5c8a" id="tps">—</div>
+      <div class="s" id="tps-sub">tok/s · live</div>
+    </div>
+    <div class="tile" data-metric="prefill" data-color="#ffa254" title="prefill speed — how fast the model reads the prompt in (tokens/sec). Your 3090 runs this around 800–900 t/s. Higher = faster first token (TTFT).">
+      <div class="spark"></div>
+      <div class="k" style="color:#ffa254">prefill</div>
+      <div class="v" style="color:#ffa254" id="prefill">—</div>
+      <div class="s" id="prefill-sub">prompt t/s · —</div>
+    </div>
+    <div class="tile" data-metric="pred" data-color="#5aa9ff" title="context this turn — how many prompt tokens went in for the current/last generation, plus the model's max context window (ctx max).">
+      <div class="spark"></div>
+      <div class="k" style="color:#5aa9ff">context this turn<span class="live"></span></div>
+      <div class="v" style="color:#5aa9ff" id="ctx">—</div>
+      <div class="s"><span id="ctx-sub">prompt tokens</span> · <span style="color:#5aa9ff">ctx max <b id="ctxmax">—</b></span></div>
+    </div>
+    <div class="tile" data-metric="draft" data-color="#4dd0c4" title="draft acceptance — spec-decoding: the small draft model proposes tokens, the big model accepts/rejects them. Higher % = more tokens accepted per step = faster generation.">
+      <div class="spark"></div>
+      <div class="k" style="color:#4dd0c4">draft acceptance<span class="live"></span></div>
+      <div class="v" style="color:#4dd0c4" id="acc">—</div>
+      <div class="s" id="acc-sub">accepted / rejected</div>
+    </div>
+    <div class="tile" data-metric="gpu_util" data-color="#2ea043" title="GPU utilisation — % of the RTX 3090's compute in use, sampled every few seconds.">
+      <div class="spark"></div>
+      <div class="k" style="color:#2ea043">gpu util</div>
+      <div class="v" style="color:#2ea043" id="gutil">—</div>
+      <div class="s" id="gutil-sub">rtx 3090</div>
+    </div>
+    <div class="tile" data-metric="vram_pct" data-color="#3ddc84" data-fixed="0,100" title="VRAM used by the model (GB). Sparkline is pinned to the full 0–100% scale so you can see headroom at a glance.">
+      <div class="spark"></div>
+      <div class="k" style="color:#3ddc84">vram</div>
+      <div class="v" style="color:#3ddc84" id="vram">—</div>
+      <div class="s" id="vram-sub">of — GB</div>
+    </div>
+    <div class="tile" data-metric="temp" data-color="#7ee787">
+      <div class="spark"></div>
+      <div class="k" style="color:#7ee787">temp · ⚡ draw</div>
+      <div class="v" style="color:#7ee787" id="temp">—</div>
+      <div class="s"><span id="temp-sub" title="GPU temperature · live power draw (W) from nvidia-smi · estimated session cost at your rate">°C · — W</span><span style="color:var(--dim)"> · </span><span id="sesscost" style="color:#3ddc84" title="estimated electricity cost THIS session (since this viewport started) at your rate — GPU draw (measured) + a flat CPU estimate. Resets when the viewport restarts."></span></div>
+    </div>
+    <div class="tile" data-metric="ram_pct" data-color="#b48cff" data-fixed="0,100" title="system RAM used (GB). Sparkline is pinned to the full 0–100% scale so you can see headroom at a glance.">
+      <div class="spark"></div>
+      <div class="k" style="color:#b48cff">system ram</div>
+      <div class="v" style="color:#b48cff" id="ram">—</div>
+      <div class="s" id="ram-sub">of — GB</div>
+    </div>
+  </div>
+
+  <!-- ── progress strip ── -->
+  <div class="card" style="margin-bottom:12px">
+    <div class="barnote">
+      <span id="proglabel" title="progress = tokens generated ÷ (prompt + output) for the current request — live from LM Studio's runtime stream. 'prefill' is the prompt-read speed (your ~800–900 t/s).">prompt processing</span>
+      <span id="progval">idle</span>
+    </div>
+    <div class="bar big" title="How far along the current request is. Fills left→right as the model reads the prompt and generates. Resets each request."><i id="progbar" style="width:0%;background:var(--cyan)"></i></div>
+  </div>
+
+  <!-- ── lifetime big graphs ── -->
+  <div class="lifewrap">
+    <div class="lifesegbar">
+      <span class="lifeseglabel">📏 lifetime range · <b>all graphs</b></span>
+      <span class="lifeseg" id="seg_range">
+        <button data-r="1m" title="1 minute — very granular, refreshes every 3s. For watching the box live right now.">1m</button><button data-r="10m">10m</button><button data-r="1h">1h</button>
+        <button data-r="1d">1d</button><button data-r="7d" class="on">7d</button>
+        <button data-r="all">all</button>
+      </span>
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <h3>⚡ inference performance · decode + prefill + draft</h3>
+      <div class="lifegraph" id="lg_perf"></div>
+      <div class="legend"><span><span class="sw" style="background:#ff5c8a"></span>decode t/s (scale 0-120)</span>
+        <span><span class="sw" style="background:#ffa254"></span>prefill t/s (scale 0-900)</span>
+        <span><span class="sw" style="background:#4dd0c4"></span>draft acc % (scale 0-100)</span></div>
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <h3>📈 gpu &amp; vram · lifetime</h3>
+      <div class="lifegraph" id="lg_gpu"></div>
+      <div class="legend"><span><span class="sw" style="background:#3ddc84"></span>gpu util %</span>
+        <span><span class="sw" style="background:#c8ced9"></span>vram %</span>
+        <span><span class="sw" style="background:#ff8a5c"></span>power (scale 0-450 W)</span></div>
+      <div class="lifestat" id="ls_gpu"></div>
+    </div>
+    <div class="card" style="margin-bottom:10px">
+      <h3>🖥 cpu util · lifetime</h3>
+      <div class="lifegraph" id="lg_cpu"></div>
+      <div class="legend"><span><span class="sw" style="background:#ff3b3b"></span>cpu util %</span>
+        <span style="color:var(--dim)">CPU watts not metered on Windows — the $ cost uses a flat ~<b style="color:#ff8a5c">65W</b> estimate (see dashboard.py)</span></div>
+      <div class="lifestat" id="ls_cpu"></div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <h3>🖥 system ram · lifetime</h3>
+      <div class="lifegraph" id="lg_ram"></div>
+      <div class="legend"><span><span class="sw" style="background:#b48cff"></span>ram used %</span></div>
+      <div class="lifestat" id="ls_ram"></div>
+    </div>
+  </div>
+
+  <!-- ── per-day rollup (full width, above the feed) ── -->
+  <div class="card" style="margin-bottom:10px">
+    <h3>🗓 per-day rollup <span class="tag" id="histag"></span></h3>
+    <div style="overflow-x:auto">
+      <table id="daystbl">
+        <thead><tr>
+          <th>day</th><th>gens</th><th>tokens</th><th>avg t/s</th><th>peak t/s</th><th>TTFT</th>
+          <th>gpu</th><th>vram</th><th>cpu</th><th>ram</th><th>avg W</th>
+          <th title="time the model was actively working that day (GPU above the idle threshold)">active</th>
+          <th>kWh</th><th title="total electricity cost that day (all time, incl. parked)">cost</th>
+          <th title="electricity cost for the time it was actively working only">$ active</th>
+          <th title="what that day's tokens would cost on an average frontier API — in/out rate × tokens">$ saved</th>
+        </tr></thead>
+        <tbody id="daysbody"><tr><td colspan="17" class="d">no history yet — accumulates as you use the box</td></tr></tbody>
+      </table>
+    </div>
+    <div class="hnote">daily snapshot of what this box did — tokens, speed, hardware, energy, and the money breakdown. <b>active</b> = time the model was actually working; <b>$ saved</b> = frontier cost − active power cost. stored in <span class="key">ledger.json</span> + <span class="key">lifetime.jsonl</span>.</div>
+    <div class="ctl" style="margin-top:10px">
+      <button class="mini" id="btnHist7">7d</button>
+      <button class="mini on" id="btnHist14">14d</button>
+      <button class="mini" id="btnHist30">30d</button>
+      <button class="mini" id="btnHist90">90d</button>
+      <span style="flex:1"></span>
+      <button class="mini" id="btnHistToday" title="jump to today / most recent">latest</button>
+    </div>
+  </div>
+
+  <!-- ── feed + settings + data (3-col row) ── -->
+  <div class="grid" style="grid-template-columns:1.5fr 1fr 1fr;gap:10px">
+    <div class="card">
+      <h3>📡 generation feed <span class="tag" id="feedtag"></span></h3>
+      <div id="feed" style="height:300px"></div>
+      <div class="ctl">
+        <input type="text" id="filter" placeholder="🔎 filter events (a word, 'toolCalls', 'eos', 'prefill'…)…">
+        <button class="mini" id="btnFeedMore">more (300)</button>
+        <button class="mini" id="btnFeedClear">clear view</button>
+      </div>
+      <div class="hnote">each row is one generation on this box — Hermes, the CLI, anything. <b>tok/s + TTFT</b> from LM Studio's model stream; <b>context</b> = prompt tokens in.</div>
+    </div>
+
+    <div class="card" title="Every tweakable knob — edits save to settings.json and apply live (no restart).">
+      <h3>⚙ settings</h3>
+      <div class="kvrow">
+        <div class="field"><label for="sg_cost">rate ¢/kWh</label><input type="number" step="0.01" min="0" id="sg_cost"></div>
+        <div class="field"><label for="sg_cpuw">cpu W (est.)</label><input type="number" step="1" min="0" id="sg_cpuw" title="flat CPU+platform wattage estimate added into the kWh math (Windows can't meter CPU power directly)"></div>
+        <div class="field"><label for="sg_fin">frontier in $/M</label><input type="number" step="0.1" min="0" id="sg_fin" title="avg input-token price of a frontier API — used to compute $ saved"></div>
+        <div class="field"><label for="sg_fout">frontier out $/M</label><input type="number" step="0.1" min="0" id="sg_fout" title="avg output-token price of a frontier API — used to compute $ saved"></div>
+        <div class="field"><label for="sg_idle">idle W threshold</label><input type="number" step="5" min="0" id="sg_idle" title="GPU draw below this = 'not working'. Gates $ saved + active-time. Raise if your idle draw is higher; lower if it's lower."></div>
+        <div class="field"><label for="sg_days">retain lifetime (d)</label><input type="number" step="1" min="7" id="sg_days" title="how many days of lifetime.jsonl to keep before compacting to archive. Lower = smaller files; higher = more history."></div>
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="mini on" id="btnSaveSettings">save settings</button>
+        <button class="mini" id="btnResetSettings" title="revert to the built-in defaults (11¢/65W/3.2/13.8/110W/30d)">reset</button>
+      </div>
+      <div class="hnote">applies live. <b>$ saved</b> only counts time the GPU is above the idle threshold — parked/idle time doesn't inflate it.</div>
+    </div>
+
+    <div class="card">
+      <h3>💾 data</h3>
+      <div class="datarow"><span class="k">lifetime.jsonl</span><span class="v" id="ds_lifetime">—</span></div>
+      <div class="datarow"><span class="k">history.jsonl</span><span class="v" id="ds_history">—</span></div>
+      <div class="datarow"><span class="k">ledger.json</span><span class="v" id="ds_ledger">—</span></div>
+      <div class="datarow"><span class="k">archive/</span><span class="v" id="ds_archive">—</span></div>
+      <div class="datarow"><span class="k">total on disk</span><span class="v big" id="ds_total">—</span></div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="mini" id="btnCompact" title="rotate samples older than the retention window into archive/. All-time totals survive (they live in ledger.json).">compact now</button>
+      </div>
+      <div class="hnote">all-time tokens + energy live in <span class="key">ledger.json</span> — they survive restarts AND compaction. compact moves old samples to <span class="key">archive/</span> to keep files small.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span><b>source</b> <span class="key">lms log stream</span> (model+runtime) + <span class="key">nvidia-smi</span> + <span class="key">psutil</span> · read-only · no token</span>
+    <span><b>server</b> <span id="footserver">127.0.0.1:1234</span></span>
+    <span><b>viewport</b> :18022</span>
+    <span style="margin-left:auto" class="tag">LM Studio Telemetry Viewport</span>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const j=async(url,opts)=>{const r=await fetch(url,opts);const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(d.error||("HTTP "+r.status));return d;};
+const toast=(m,k)=>{const t=$("toast");t.textContent=m;t.className="toast show "+(k||"");
+  clearTimeout(toast._t);toast._t=setTimeout(()=>t.className="toast",k==="err"?6000:3200);};
+const esc=s=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const set=(id,t)=>{$(id).textContent=t;};
+// 128000 -> "128k", 64000 -> "64k", 1050000 -> "1.05m" (compact for the ctx-max read)
+const fmtK=n=>{ n=+n||0; if(n>=1e6) return (n/1e6).toFixed(n%1e6?1:0)+"m"; if(n>=1000) return (n/1000).toFixed(n%1000?1:0)+"k"; return String(n); };
+const TILE_RANGE="15m", LIFETIME_BUCKETS=120;
+let curUptimeBase=null; // {t0, uptime} captured at first status where uptime_sec present
+let lastAsof=0;
+
+$("btnExit").onclick=()=>{
+  if(confirm("Close the viewport? The LM Studio server and model keep running.")){
+    const b=$("btnExit");b.disabled=true;b.innerHTML='<span class="spin"></span>⏻ closing';
+    j("/api/exit",{method:"POST"}).then(r=>toast(r.note||"closing","ok")).catch(()=>{});
+    setTimeout(()=>{document.body.style.opacity=".5";},600);
+  }
+};
+
+/* ───────────────────────── tile sparklines (SVG) ───────────────────────── */
+// Hand-rolled SVG: a viewBox stretched with preserveAspectRatio="none" fills the
+// tile in ANY container state (background tab, first paint, preview pane) — no
+// canvas 0×0 sizing failures. Static: redraws only when a NEW point lands, so the
+// line doesn't twitch while idle. Auto-scaled to the visible 5-minute window.
+class Spark{
+  constructor(host, color){ this.host=host; this.color=color; this.lastT=null; }
+  set(pts){
+    if(!pts||pts.length<2) return;
+    const t1=pts[pts.length-1][0];
+    if(this.lastT!=null && t1<=this.lastT) return;   // static: no twitch while idle
+    this.lastT=t1;
+    const W=300;                                       // fixed 5-minute window
+    let data=pts.filter(p=>p[0]>=t1-W);
+    if(data.length<2) data=pts.slice(-2);
+    const xs=data.map(p=>p[0]), ys=data.map(p=>p[1]);
+    const x0=Math.min.apply(null,xs), x1=Math.max.apply(null,xs);
+    let y0=Math.min.apply(null,ys), y1=Math.max.apply(null,ys);
+    if(y1<=y0){ y1=(y0||0)+1; y0=(y0||0)-1; }
+    const VW=100, VH=48;
+    const px=i=>((x1-x0)?(xs[i]-x0)/(x1-x0):0)*VW;
+    const py=i=>VH-((ys[i]-y0)/(y1-y0))*VH;
+    let line="M"+px(0).toFixed(2)+","+py(0).toFixed(2);
+    for(let i=1;i<xs.length;i++) line+=" L"+px(i).toFixed(2)+","+py(i).toFixed(2);
+    const area=line+" L"+px(xs.length-1).toFixed(2)+","+VH+" L"+px(0).toFixed(2)+","+VH+" Z";
+    const c=this.color;
+    this.host.innerHTML=
+      '<svg viewBox="0 0 '+VW+' '+VH+'" preserveAspectRatio="none" style="width:100%;height:100%;display:block;pointer-events:none;opacity:.55">'
+      +'<path d="'+area+'" fill="'+c+'" fill-opacity=".18" stroke="none"/>'
+      +'<path d="'+line+'" fill="none" stroke="'+c+'" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>';
+  }
+}
+// Instantiate one Spark per tile (into its .spark div host).
+const sparks={};
+document.querySelectorAll(".tile[data-metric]").forEach(el=>{
+  const host=el.querySelector(".spark");
+  const fixed=el.dataset.fixed?el.dataset.fixed.split(",").map(Number):null;
+  if(host) sparks[el.dataset.metric]=new Spark(host, el.dataset.color||"#4dd0c4", fixed);
+});
+async function tickSparks(){
+  const tiles=document.querySelectorAll(".tile[data-metric]");
+  await Promise.all([...tiles].map(async el=>{
+    const metric=el.dataset.metric, color=el.dataset.color||"#4dd0c4";
+    let pts=[];
+    try{ pts=(await j("/api/series?metric="+metric+"&range=5m")).points||[]; }catch(e){}
+    if(sparks[metric]) sparks[metric].set(pts);
+  }));
+}
+
+/* ───────────────────────── status ───────────────────────── */
+async function tick(){
+  let st;
+  try{ st=await j("/api/status"); }catch(e){ setPill("off","viewport offline"); return; }
+  const now=st.asof||Date.now()/1000;
+  const srv=st.server, model=st.model;
+  if(model){ set("modelname",(model.displayName||model.modelKey||"")+"  ·  "+(model.quantization?model.quantization.name:""));
+    if(model.contextLength) set("ctxmax",fmtK(model.contextLength)); }
+  const foot=srv&&srv.port?("127.0.0.1:"+srv.port):"127.0.0.1:1234"; set("footserver",foot);
+
+  // uptime: derive from lastUsedTime delta so it ticks live
+  if(st.uptime_sec!=null){
+    if(!curUptimeBase) curUptimeBase={t0:now, up:st.uptime_sec};
+    const live=curUptimeBase.up+(now-curUptimeBase.t0);
+    const uv=document.getElementById("uptimev"); if(uv) uv.textContent=fmtUptime(live);
+  } else if(curUptimeBase){ /* keep last */ }
+
+  if(srv&&srv.running){
+    // GENERATING only while the model is actually working: its reported status
+    // is active, OR a fresh live tick landed in the last 12s. Otherwise READY —
+    // no longer latched on the (stuck) prompt_progress value.
+    const activeStatus = model && /running|busy|generating/i.test(model.status||"");
+    const liveNow = (st.live && st.live.decode!=null && !st.live.stale);
+    const busy = activeStatus || liveNow || (st.progress_fresh===true && st.prompt_progress!=null && st.prompt_progress<1);
+    if(busy){
+      let label = "GENERATING";
+      if(st.progress_fresh===true && st.prompt_progress!=null && st.prompt_progress<1)
+        label += " · " + Math.round(st.prompt_progress*100) + "%";
+      setPill("busy", label);
+    } else {
+      setPill("ok", "READY · " + (model?(model.status||"idle"):"idle"));
+    }
+  } else { setPill("off","SERVER OFF"); }
+
+  const g=st.gpu;
+  if(g){
+    set("gutil",g.util_pct+"%");
+    set("vram",(g.vram_used_mb/1024).toFixed(1)+" GB"); set("vram-sub","of "+(g.vram_total_mb/1024).toFixed(0)+" GB");
+    set("temp",g.temp_c+"°"); set("temp-sub",g.power_w.toFixed(0)+" W draw");
+  } else { set("gutil","—"); set("vram","—"); set("vram-sub","nvidia-smi n/a"); set("temp","—"); set("temp-sub",""); }
+  const r=st.ram;
+  if(r){ set("ram",r.pct+"%"); set("ram-sub",(r.used_mb/1024).toFixed(1)+" / "+(r.total_mb/1024).toFixed(0)+" GB"); }
+  else { set("ram","—"); set("ram-sub","psutil n/a"); }
+
+  // prefill tile (flushes to 0 when model is idle — no more frozen last value)
+  {
+    const lv2=st.live||{}, rt2=st.runtime||{}, s=st.session;
+    const avgTxt=(s&&s.n_prefill?(s.sum_prefill/s.n_prefill).toFixed(0):"—");
+    const peakTxt=(s&&s.peak_prefill?s.peak_prefill.toFixed(0):"—");
+    if(st.prefill_tps!=null){
+      if(lv2.stale){
+        set("prefill","0");
+        set("prefill-sub","idle · session avg "+avgTxt+" · peak "+peakTxt);
+      } else {
+        set("prefill",st.prefill_tps>=10?st.prefill_tps.toFixed(0):st.prefill_tps.toFixed(1));
+        set("prefill-sub","prompt t/s · session avg "+avgTxt+" · peak "+peakTxt);
+      }
+    }
+  }
+  // progress bar (resets to 0 when not actively processing a prompt)
+  if(st.progress_fresh===true && st.prompt_progress!=null){
+    const pct=Math.round(st.prompt_progress*100);
+    $("progbar").style.width=pct+"%";
+    set("progval",pct+"% · processing");
+    $("proglabel").textContent="prompt processing";
+  } else {
+    $("progbar").style.width="0%";
+    set("progval","idle");
+  }
+
+  // ── LIVE runtime needles (real-time, from the runtime stream) ──
+  // decode t/s, tokens-this-turn, draft % — pulse while generating, settle when idle.
+  const lv=st.live||{}, rt=st.runtime||{};
+  const generating=lv.decode!=null && !lv.stale;
+  // decode speed tile (continuous needle; flushes to 0 when the model goes idle)
+  if(lv.decode!=null){
+    if(lv.stale){
+      set("tps","0");
+      set("tps-sub","idle · avg "+(rt.decode_avg??"—")+" · peak "+(rt.decode_peak??"—"));
+    } else {
+      set("tps",lv.decode>=10?lv.decode.toFixed(0):lv.decode.toFixed(1));
+      set("tps-sub","tok/s · live · avg "+(rt.decode_avg??"—")+" · peak "+(rt.decode_peak??"—"));
+    }
+  } else if(st.last_event&&st.last_event.tps!=null){
+    set("tps",st.last_event.tps>=10?st.last_event.tps.toFixed(0):st.last_event.tps.toFixed(1));
+    set("tps-sub","tok/s · last gen");
+  }
+  // context-this-turn tile (prompt tokens = "context in"; out-tokens = live counter)
+  if(lv.pred!=null && st.last_event && st.last_event.prompt!=null){
+    set("ctx",st.last_event.prompt.toLocaleString());
+    set("ctx-sub","in · out "+lv.pred.toLocaleString()+" (live)");
+  } else if(st.last_event&&st.last_event.prompt!=null){
+    set("ctx",st.last_event.prompt.toLocaleString());
+    set("ctx-sub","in tokens · last gen");
+  }
+  // draft acceptance tile (live % when available, last-gen fallback)
+  if(lv.draft_pct!=null){
+    set("acc",lv.draft_pct.toFixed(1)+"%");
+    set("acc-sub",(lv.stale?"idle · ":"")+"avg "+(rt.draft_avg??lv.draft_pct)+"% · peak "+(rt.draft_peak??"—")+"%");
+  } else if(st.last_event&&(st.last_event.acc!=null||st.last_event.draft!=null)){
+    const e=st.last_event;
+    const tot=(e.acc||0)+(e.rej||0);
+    set("acc",tot?(((e.acc||0)/tot)*100).toFixed(1)+"%":"—");
+    set("acc-sub",(e.acc||0)+" ✓ "+(e.rej||0)+" ✗ · last gen");
+  }
+  // live pulse dots on the three generation tiles
+  document.querySelectorAll('.tile[data-metric="decode"],.tile[data-metric="pred"],.tile[data-metric="draft"]').forEach(el=>{
+    el.classList.toggle("is-live",generating);
+  });
+}
+function fmtUptime(sec){
+  sec=Math.max(0,Math.floor(sec));
+  const d=Math.floor(sec/86400), h=Math.floor((sec%86400)/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+  if(d) return d+"d "+h+"h "+m+"m";
+  if(h) return h+"h "+m+"m "+s+"s";
+  return m+"m "+s+"s";
+}
+function setPill(cls,txt){ $("pill").className="pill "+cls; $("pilltxt").textContent=txt; }
+
+/* ───────────────────────── feed ───────────────────────── */
+let feedN=200, feedFilter="";
+function fmt(e){
+  const ts=new Date(e.ts*1000).toLocaleTimeString();
+  const acc=(e.acc!=null||e.draft!=null)?
+    '<span><span class="lbl">acc</span><span class="acc">'+(e.acc!=null?e.acc:'—')+'</span> '
+    +'<span class="rej">'+(e.rej!=null?e.rej+'✗':'')+'</span></span>':'';
+  return '<div class="ev" data-t="'+(e.tps||'')+'">'
+    +'<span class="ts">'+ts+'</span><span class="m">'+esc(e.model||'')+'</span> '
+    +'<span class="stop">'+esc(e.stop||'')+'</span>'
+    +'<div class="row">'
+    +'<span><span class="lbl">t/s</span><span class="tps">'+(e.tps!=null?(e.tps>=10?e.tps.toFixed(0):e.tps.toFixed(1)):'—')+'</span></span>'
+    +'<span><span class="lbl">ttft</span><span class="ttft">'+(e.ttft!=null?(e.ttft*1000).toFixed(0)+'ms':'—')+'</span></span>'
+    +'<span><span class="lbl">out</span>'+(e.pred!=null?e.pred:'—')+'</span>'
+    +'<span><span class="lbl">ctx</span>'+(e.prompt!=null?e.prompt.toLocaleString():'—')+'</span>'
+    +acc
+    +'</div></div>';
+}
+async function tickf(){
+  let evs=[];
+  try{ evs=(await j("/api/events?n="+feedN)).events; }catch(e){return;}
+  const f=feedFilter.trim().toLowerCase();
+  const box=$("feed");
+  if(!evs.length){ box.innerHTML='<div class="empty">no generations yet — send a message to Hermes and they appear here live.</div>'; $("feedtag").textContent="0 events"; return; }
+  box.innerHTML=evs.map(e=>{
+    const line=fmt(e);
+    const hit=f&&line.toLowerCase().includes(f)?" hit":"";
+    return line.replace('class="ev"','class="ev'+hit+'"');
+  }).join("");
+  if(f){ const n=box.querySelectorAll(".hit").length; $("feedtag").textContent=evs.length+" events · "+n+" match"; }
+  else $("feedtag").textContent=evs.length+" events";
+}
+$("btnFeedMore").onclick=()=>{feedN=300;tickf();};
+$("btnFeedClear").onclick=()=>$("feed").innerHTML='';
+$("filter").oninput=e=>{feedFilter=e.target.value;tickf();};
+
+/* ───────────────────────── lifetime graphs (SVG) ───────────────────────── */
+// Self-contained SVG chart, Grafana-style. Each series is plotted over ITS OWN
+// timestamps (no cross-series alignment — that was the old bug that hid lines),
+// each on a fixed y-scale so mixed units stay legible. Labeled time + value axes,
+// a subtle grid, and a dashed vertical crosshair whose floating tooltip lists
+// every line's value (swatch · name · value) at the hovered instant.
+function fmtWhen(t){ const d=new Date(t*1000), p=n=>String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes())+":"+p(d.getSeconds()); }
+function fmtTick(t,spanSec){ const d=new Date(t*1000), p=n=>String(n).padStart(2,"0");
+  if(spanSec<=86400) return p(d.getHours())+":"+p(d.getMinutes());
+  return p(d.getMonth()+1)+"/"+p(d.getDate()); }
+function fmtVal(v,unit){ if(unit==="%") return v.toFixed(1)+" %";
+  if(unit==="W") return Math.round(v)+" W";
+  if(unit==="t/s") return (v>=10?v.toFixed(0):v.toFixed(1))+" t/s";
+  return String(v); }
+
+// renderChart(host, series) — series: [{label,color,unit,range:[lo,hi],pts:[[t,v],...]}]
+function renderChart(host, series){
+  const W = Math.max(320, host.clientWidth || 900);
+  const H = Math.max(110, host.clientHeight || 160);
+  const live = series.filter(s => s && s.pts && s.pts.length);
+  if(!live.length){
+    host.innerHTML = '<div class="lc-empty">no data yet — accumulates as you use the box</div>';
+    return;
+  }
+  // Group series into distinct scales (lo|hi|unit). Same scale → same axis.
+  // Primary scale → LEFT axis, any second distinct scale → RIGHT axis (Grafana style).
+  const scales = [];
+  live.forEach(s => {
+    const key = s.range[0]+"|"+s.range[1]+"|"+s.unit;
+    if(!scales.some(sc => sc.lo+"|"+sc.hi+"|"+sc.unit === key))
+      scales.push({ lo: s.range[0], hi: s.range[1], unit: s.unit, color: s.color });
+  });
+  const primary = scales[0], rest = scales.slice(1);
+  const labLen = sc => { let m=0; for(let k=0;k<=4;k++) m=Math.max(m, Math.round(sc.lo+(sc.hi-sc.lo)*k/4).toString().length); return m; };
+  const rMax = rest.length ? Math.max.apply(null, rest.map(s=>labLen(s))) : 0;
+  const rCol = rMax*7 + 9;                                   // width of one right-axis column
+  const M = { t: 16, b: 28, l: 14 + labLen(primary)*7, r: rest.length ? 10 + rCol*rest.length : 14 };
+  const pw = W - M.l - M.r, ph = H - M.t - M.b;
+
+  let t0 = Infinity, t1 = -Infinity;
+  live.forEach(s => s.pts.forEach(p => { if(p[0] < t0) t0 = p[0]; if(p[0] > t1) t1 = p[0]; }));
+  const span = (t1 - t0) || 1, spanSec = span;
+  const xpx = t => M.l + (t - t0) / span * pw;
+  const ylab = (v,unit) => unit==="W" ? Math.round(v) : (unit==="%"? Math.round(v) : Math.round(v));
+  const yOf = (sc,v) => M.t + ph - (v - sc.lo) / (sc.hi - sc.lo) * ph;
+
+  // grid + x-axis ticks
+  const nX = Math.max(2, Math.min(8, Math.round(pw / 120)));
+  let grid = "";
+  for(let i = 0; i <= nX; i++){
+    const t = t0 + span * i / nX, x = xpx(t).toFixed(1);
+    grid += '<line x1="'+x+'" y1="'+M.t+'" x2="'+x+'" y2="'+(M.t+ph)+'" class="lc-grid"/>';
+    grid += '<text class="lc-xlab" x="'+x+'" y="'+(H-9)+'" text-anchor="middle">'+fmtTick(t, spanSec)+'</text>';
+  }
+  // subtle grid from the primary scale only (keeps the background clean)
+  for(let k = 0; k <= 4; k++){
+    const v = primary.lo + (primary.hi - primary.lo) * k / 4;
+    grid += '<line x1="'+M.l+'" y1="'+yOf(primary,v).toFixed(1)+'" x2="'+(W-M.r)+'" y2="'+yOf(primary,v).toFixed(1)+'" class="lc-grid"/>';
+  }
+  // LEFT axis = primary scale, colour-coded to its line
+  for(let k = 0; k <= 4; k++){
+    const v = primary.lo + (primary.hi - primary.lo) * k / 4;
+    grid += '<text x="'+(M.l-8)+'" y="'+(yOf(primary,v)+3.5).toFixed(1)+'" text-anchor="end" style="fill:'+primary.color+';font:600 10px var(--mono)">'+ylab(v,primary.unit)+'</text>';
+  }
+  // RIGHT axis = any other distinct scales (prefill/draft/power), colour-coded,
+  // each in its OWN column so co-extending scales (0-900 & 0-100) never overlap
+  rest.forEach((sc, ci) => {
+    const rx = W - M.r + 8 + ci*rCol;
+    for(let k = 0; k <= 4; k++){
+      const v = sc.lo + (sc.hi - sc.lo) * k / 4;
+      grid += '<text x="'+rx+'" y="'+(yOf(sc,v)+3.5).toFixed(1)+'" text-anchor="start" style="fill:'+sc.color+';font:600 10px var(--mono)">'+ylab(v,sc.unit)+'</text>';
+    }
+  });
+  grid += '<line x1="'+M.l+'" y1="'+(M.t+ph)+'" x2="'+(W-M.r)+'" y2="'+(M.t+ph)+'" class="lc-axis"/>';
+  grid += '<line x1="'+M.l+'" y1="'+M.t+'" x2="'+M.l+'" y2="'+(M.t+ph)+'" class="lc-axis"/>';
+
+  // series: translucent area fill + line, each on its own y-scale
+  let body = "";
+  live.forEach(s => {
+    const [lo, hi] = s.range, y = v => M.t + ph - (v - lo) / (hi - lo) * ph;
+    let d = "";
+    s.pts.forEach((p, i) => { d += (i ? "L" : "M") + xpx(p[0]).toFixed(1) + " " + y(p[1]).toFixed(1) + " "; });
+    const first = s.pts[0], last = s.pts[s.pts.length - 1];
+    body += '<path d="'+d+'L'+xpx(last[0]).toFixed(1)+' '+(M.t+ph)+' L'+xpx(first[0]).toFixed(1)+' '+(M.t+ph)+' Z" fill="'+s.color+'" fill-opacity=".13" stroke="none"/>';
+    body += '<path d="'+d+'" fill="none" stroke="'+s.color+'" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>';
+  });
+
+  host.innerHTML =
+    '<svg class="lc-svg" width="'+W+'" height="'+H+'" style="display:block;cursor:crosshair">'+
+    '<g>'+grid+'</g>'+body+
+    '<line class="lc-xh" y1="'+M.t+'" y2="'+(M.t+ph)+'" style="display:none"/>'+
+    '<g class="lc-markers"></g></svg>'+
+    '<div class="lc-tip" style="display:none"></div>';
+
+  const svg = host.querySelector("svg");
+  const xh  = host.querySelector(".lc-xh");
+  const mg  = host.querySelector(".lc-markers");
+  const tip = host.querySelector(".lc-tip");
+
+  svg.addEventListener("mousemove", e => {
+    const r = svg.getBoundingClientRect();
+    let mx = e.clientX - r.left;
+    if(mx < M.l) mx = M.l; if(mx > W - M.r) mx = W - M.r;
+    const tHover = t0 + (mx - M.l) / pw * span;
+    xh.setAttribute("x1", mx.toFixed(1)); xh.setAttribute("x2", mx.toFixed(1));
+    xh.style.display = "";
+    let rows = "", marks = "";
+    live.forEach(s => {
+      let bi = 0, bd = Infinity;
+      for(let i = 0; i < s.pts.length; i++){ const d = Math.abs(s.pts[i][0] - tHover); if(d < bd){ bd = d; bi = i; } }
+      const p = s.pts[bi], [lo, hi] = s.range;
+      const y = M.t + ph - (p[1] - lo) / (hi - lo) * ph;
+      marks += '<circle cx="'+xpx(p[0]).toFixed(1)+'" cy="'+y.toFixed(1)+'" r="3.4" fill="'+s.color+'" stroke="#0d1017" stroke-width="1.5"/>';
+      rows  += '<div class="lc-row"><span class="lc-sw" style="background:'+s.color+'"></span>'+
+               '<span class="lc-name">'+s.label+'</span>'+
+               '<span class="lc-val">'+fmtVal(p[1], s.unit)+'</span></div>';
+    });
+    tip.innerHTML = '<div class="lc-when">'+fmtWhen(tHover)+'</div>'+rows;
+    tip.style.display = "";
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let tx = mx + 14; if(tx + tw > W - 4) tx = mx - tw - 14; if(tx < 4) tx = 4;
+    tip.style.left = tx + "px";
+    tip.style.top  = Math.min(M.t + 8, H - th - 6) + "px";
+  });
+  svg.addEventListener("mouseleave", () => { xh.style.display = "none"; mg.innerHTML = ""; tip.style.display = "none"; });
+}
+
+function toPts(arr){
+  if(!arr) return [];
+  return arr.map(p => Array.isArray(p) ? [p[0], p[1]] : [p.t, p.v])
+            .filter(p => isFinite(p[0]) && isFinite(p[1]));
+}
+
+let lifeRange = "7d";  // unified: drives ALL lifetime graphs
+async function tickLifetime(){
+  const R = lifeRange;
+  const J = async m => { try { return (await j("/api/series?metric="+m+"&range="+R)).points; } catch(e){ return []; } };
+
+  // ── GPU & VRAM + Power (gpu/vram % 0-100, power W 0-450) ──
+  const g  = toPts(await J("gpu_util"));
+  const v  = toPts(await J("vram_pct"));
+  const pw = toPts(await J("power"));
+  renderChart($("lg_gpu"), [
+    { label: "gpu util",  color: "#3ddc84", unit: "%",   range: [0, 100], pts: g  },
+    { label: "vram",      color: "#c8ced9", unit: "%",   range: [0, 100], pts: v  },
+    { label: "power",     color: "#ff8a5c", unit: "W",   range: [0, 450], pts: pw },
+  ]);
+
+  // ── CPU util (% 0-100) ──
+  const cu = toPts(await J("cpu_util"));
+  renderChart($("lg_cpu"), [
+    { label: "cpu util", color: "#ff3b3b", unit: "%", range: [0, 100], pts: cu },
+  ]);
+
+  // ── RAM (% 0-100) ──
+  const r = toPts(await J("ram_pct"));
+  renderChart($("lg_ram"), [
+    { label: "ram used", color: "#b48cff", unit: "%", range: [0, 100], pts: r },
+  ]);
+
+  // ── Inference: decode (pop) + prefill + draft, each own scale ──
+  let perf = {};
+  try { perf = (await j("/api/series?metric=perf&range="+R)).points || {}; } catch(e){}
+  const dec = toPts(perf.decode), pre = toPts(perf.prefill), dra = toPts(perf.draft);
+  renderChart($("lg_perf"), [
+    { label: "decode",    color: "#ff5c8a", unit: "t/s", range: [0, 120], pts: dec },
+    { label: "prefill",   color: "#ffa254", unit: "t/s", range: [0, 900], pts: pre },
+    { label: "draft acc", color: "#4dd0c4", unit: "%",   range: [0, 100], pts: dra },
+  ]);
+
+  // lifetime stats — avg/peak inline, sample count (n) tucked into the tooltip
+  let lt = {};
+  try { lt = await j("/api/lifetime?days=30"); } catch(e){}
+  const fmt = (o,unit) => o && o.avg != null ? ('avg <b>'+o.avg+'</b>'+unit+' · peak <b>'+o.peak+'</b>'+unit) : "—";
+  const nOf = o => (o&&o.n!=null? o.n : "—");
+  $("ls_gpu").innerHTML =
+    'gpu '+fmt(lt.gpu_util,"%") + ' &nbsp;·&nbsp; ' +
+    'vram '+fmt(lt.vram_pct,"%") + ' &nbsp;·&nbsp; ' +
+    'power '+fmt(lt.power_w," W");
+  $("ls_gpu").title = "sample counts (n) — gpu "+nOf(lt.gpu_util)+" · vram "+nOf(lt.vram_pct)+" · power "+nOf(lt.power_w);
+  $("ls_cpu").innerHTML = 'cpu '+fmt(lt.cpu_util,"%");
+  $("ls_cpu").title = "sample count (n) "+nOf(lt.cpu_util);
+  $("ls_ram").innerHTML = 'ram '+fmt(lt.ram_pct,"%");
+  $("ls_ram").title = "sample count (n) "+nOf(lt.ram_pct);
+}
+function wireSeg(id, cb){
+  $(id).querySelectorAll("button").forEach(b=>b.onclick=()=>{
+    $(id).querySelectorAll("button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); cb(b.dataset.r);
+  });
+}
+
+/* ───────────────────────── history table (rich per-day rollup) ───────────────────────── */
+let histDays=14;
+function fmtHr(sec){ sec=Math.round(+sec||0); if(!sec) return "—";
+  const h=Math.floor(sec/3600), m=Math.round((sec%3600)/60);
+  return h?h+"h "+m+"m":m+"m"; }
+function fmtBytes(b){ b=+b||0; if(!b) return "0 B";
+  if(b<1024) return b+" B"; if(b<1048576) return (b/1024).toFixed(1)+" KB";
+  return (b/1048576).toFixed(2)+" MB"; }
+async function hist(){
+  let days=[];
+  try{ days=(await j("/api/history?days="+histDays)).days; }catch(e){return;}
+  const body=$("daysbody");
+  if(!days.length){ body.innerHTML='<tr><td colspan="17" class="d">no history yet — accumulates as you use the box</td></tr>'; return; }
+  const money=v=>{ v=+v||0; if(v<1) return "$"+v.toFixed(3); if(v<1000) return "$"+v.toFixed(2); return "$"+Math.round(v).toLocaleString(); };
+  body.innerHTML=days.slice().reverse().map(d=>
+    '<tr><td class="d">'+esc(d.day)+'</td><td>'+d.gens+'</td>'
+    +'<td>'+(d.tokens?d.tokens.toLocaleString():"—")+'</td>'
+    +'<td>'+(d.avg_tps!=null?d.avg_tps:"—")+'</td>'
+    +'<td>'+(d.peak_tps!=null?d.peak_tps:"—")+'</td>'
+    +'<td>'+(d.avg_ttft_ms!=null?d.avg_ttft_ms+"ms":"—")+'</td>'
+    +'<td>'+(d.gpu_util!=null?d.gpu_util+"%":"—")+'</td>'
+    +'<td>'+(d.vram_pct!=null?d.vram_pct+"%":"—")+'</td>'
+    +'<td>'+(d.cpu_util!=null?d.cpu_util+"%":"—")+'</td>'
+    +'<td>'+(d.ram_pct!=null?d.ram_pct+"%":"—")+'</td>'
+    +'<td>'+(d.power_w!=null?d.power_w+"W":"—")+'</td>'
+    +'<td title="'+(d.active_sec?Math.round(d.active_sec)+"s":"0s")+'">'+fmtHr(d.active_sec)+'</td>'
+    +'<td>'+(d.kwh!=null?d.kwh.toFixed(3):"—")+'</td>'
+    +'<td>'+money(d.cost)+'</td>'
+    +'<td>'+money(d.active_cost)+'</td>'
+    +'<td style="color:var(--green)">'+money(d.saved)+'</td></tr>').join("");
+  $("histag").textContent=histDays+"d · "+days.length+" days";
+}
+[["btnHist7",7],["btnHist14",14],["btnHist30",30],["btnHist90",90]].forEach(([id,d])=>{
+  $(id).onclick=()=>{
+    histDays=d;
+    ["btnHist7","btnHist14","btnHist30","btnHist90"].forEach(x=>$(x).classList.remove("on"));
+    $(id).classList.add("on"); hist();
+  };
+});
+$("btnHistToday").onclick=()=>{ histDays=1; hist(); toast("showing today","ok"); };
+
+/* ───────────────────────── settings panel ───────────────────────── */
+const SG_DEFAULTS={ cost_per_kwh:0.11, cpu_w:65, frontier_in:3.2, frontier_out:13.8, idle_power_w:110, lifetime_days:30 };
+let sgLoaded=false;
+async function loadSettings(){
+  let s;
+  try{ s=await j("/api/settings"); }catch(e){ return; }
+  $("sg_cost").value  = (s.cost_per_kwh||0)*100;   // show as ¢/kWh
+  $("sg_cpuw").value  = s.cpu_w||65;
+  $("sg_fin").value   = s.frontier_in||3.2;
+  $("sg_fout").value  = s.frontier_out||13.8;
+  $("sg_idle").value  = s.idle_power_w||110;
+  $("sg_days").value  = s.lifetime_days||30;
+  sgLoaded=true;
+}
+$("btnSaveSettings").onclick=async()=>{
+  const payload={
+    cost_per_kwh:+$("sg_cost").value/100||0.11,
+    cpu_w:+$("sg_cpuw").value||65,
+    frontier_in:+$("sg_fin").value||3.2,
+    frontier_out:+$("sg_fout").value||13.8,
+    idle_power_w:+$("sg_idle").value||110,
+    lifetime_days:+$("sg_days").value||30
+  };
+  try{
+    const r=await j("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    toast("settings saved — "+(r.note||"applied live"),"ok");
+    tickTotals(); // refresh cost pills immediately
+  }catch(e){ toast("save failed: "+e.message,"err"); }
+};
+$("btnResetSettings").onclick=()=>{
+  if(!confirm("Reset all settings to defaults?\n  rate 11¢/kWh · cpu 65W · frontier $3.2/$13.8 · idle 110W · retain 30d")) return;
+  $("sg_cost").value=11; $("sg_cpuw").value=65; $("sg_fin").value=3.2; $("sg_fout").value=13.8; $("sg_idle").value=110; $("sg_days").value=30;
+  $("btnSaveSettings").click();
+};
+
+/* ───────────────────────── data panel ───────────────────────── */
+async function tickData(){
+  let d;
+  try{ d=await j("/api/data"); }catch(e){ return; }
+  $("ds_lifetime").textContent=fmtBytes(d.lifetime_bytes);
+  $("ds_history").textContent=fmtBytes(d.history_bytes);
+  $("ds_ledger").textContent=fmtBytes(d.ledger_bytes);
+  $("ds_archive").textContent=fmtBytes(d.archive_bytes);
+  const tot=d.lifetime_bytes+d.history_bytes+d.ledger_bytes+d.archive_bytes;
+  $("ds_total").textContent=fmtBytes(tot);
+}
+$("btnCompact").onclick=async()=>{
+  if(!confirm("Compact now?\nMoves samples older than the retention window into archive/.\nAll-time totals (tokens + energy) survive — they live in ledger.json.")) return;
+  const btn=$("btnCompact"); btn.disabled=true; btn.textContent="… compacting";
+  try{
+    const r=await j("/api/compact",{method:"POST"});
+    toast(r.note||("compacted: moved "+(r.moved||0)+" samples"),"ok");
+    tickData();
+  }catch(e){ toast("compact failed: "+e.message,"err"); }
+  btn.disabled=false; btn.textContent="compact now";
+};
+
+/* ───────────────────────── tokens-all-time pill ───────────────────────── */
+async function tickTotals(){
+  let t;
+  try{ t=await j("/api/totals"); }catch(e){ return; }
+  const n=(t.tokens_all!=null)?t.tokens_all:0;
+  set("tokallv", n.toLocaleString());
+  const g=(t.gens!=null)?t.gens:0;
+  $("tokall").title="total tokens processed across every generation ever recorded on this box · "+g.toLocaleString()+" generations";
+  const money=v=>{ v=+v||0; if(v<1) return "$"+v.toFixed(3); if(v<1000) return "$"+v.toFixed(2); return "$"+Math.round(v).toLocaleString(); };
+  // all-time electricity cost pill
+  if(t.all_cost!=null){
+    set("allcostv", money(t.all_cost));
+    $("allcost").title="all-time electricity cost at "+((t.rate||0.11)*100).toFixed(2)+"¢/kWh · "+(t.all_kwh!=null?t.all_kwh.toFixed(2):"—")+" kWh · GPU draw (measured) + ~"+(t.cpu_w!=null?Math.round(t.cpu_w):65)+"W CPU estimate · active "+(t.active_hours!=null?t.active_hours.toFixed(1):"—")+"h of "+(t.total_hours!=null?t.total_hours.toFixed(1):"—")+"h uptime";
+  }
+  // $ saved pill (frontier API cost for the same tokens − local electricity)
+  if(t.saved!=null){
+    set("savedv", money(t.saved));
+    $("saved").title="same tokens on an average frontier API ≈ $"+(t.frontier_cost!=null?t.frontier_cost.toFixed(0):"—")+" ("+(t.tokens_in!=null?(t.tokens_in/1e6).toFixed(0):"—")+"M in @ $"+(t.frontier_in||3.2)+"/M · "+(t.tokens_out!=null?(t.tokens_out/1e6).toFixed(0):"—")+"M out @ $"+(t.frontier_out||13.8)+"/M) − your active power cost $"+(t.active_cost!=null?t.active_cost.toFixed(2):"—")+" · only counts time the GPU was above the idle threshold ("+(t.idle_w!=null?Math.round(t.idle_w):110)+"W)";
+  }
+  // session cost in the temp·draw tile
+  set("sesscost", t.sess_cost!=null? "~$"+t.sess_cost.toFixed(3):"");
+}
+
+/* ───────────────────────── go ───────────────────────── */
+window.__pageerr = null;
+window.addEventListener("error", function(e){
+  window.__pageerr = (window.__pageerr||"") + " | " + (e.message||"error") + " @ " + (e.lineno||"");
+});
+tick(); tickf(); tickSparks(); tickLifetime(); hist(); tickTotals(); loadSettings(); tickData();
+setInterval(tick, 1500);
+setInterval(tickf, 2000);
+setInterval(tickSparks, 3000);
+// lifetime graphs: 3s in the granular "1m" range (real-time), 30s otherwise
+window.__lifeT = setInterval(tickLifetime, lifeRange==="1m" ? 3000 : 30000);
+wireSeg("seg_range", r=>{ lifeRange=r; tickLifetime();
+  clearInterval(window.__lifeT); window.__lifeT=setInterval(tickLifetime, r==="1m" ? 3000 : 30000); });
+setInterval(hist, 60000);
+setInterval(tickTotals, 60000);
+setInterval(tickData, 60000);
+</script>
+</body>
+</html>
