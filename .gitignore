@@ -6,6 +6,10 @@ __pycache__/
 
 # Runtime state (never ship data)
 viewport.log
+*.pid
+viewport_crash.log
+viewport_watchdog.log
+dashboard_stdout.log
 history.jsonl
 lifetime.jsonl
 state.json
