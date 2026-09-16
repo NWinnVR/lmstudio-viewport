@@ -27,6 +27,7 @@
   .pill.ok{color:var(--green);border-color:rgba(61,220,132,.4)} .pill.ok .dot{background:var(--green);box-shadow:0 0 8px var(--green)}
   .pill.off{color:var(--red);border-color:rgba(255,92,92,.4)} .pill.off .dot{background:var(--red)}
   .pill.busy{color:var(--cyan);border-color:rgba(77,208,196,.4)} .pill.busy .dot{background:var(--cyan);animation:pulse 1.1s infinite}
+  .pill.idle{color:var(--amber);border-color:rgba(255,180,84,.45)} .pill.idle .dot{background:var(--amber);box-shadow:0 0 8px var(--amber);animation:pulse 1.6s infinite}
   .pill.cost{color:#3ddc84;border-color:rgba(61,220,132,.35);background:rgba(61,220,132,.05)}
   .pill.cost b{color:var(--fg);font-weight:600}
   @keyframes pulse{50%{opacity:.35}}
@@ -435,9 +436,17 @@ async function tick(){
   try{ st=await j("/api/status"); }catch(e){ setPill("off","viewport offline"); return; }
   const now=st.asof||Date.now()/1000;
   const srv=st.server, model=st.model;
-  if(model){ set("modelname",(model.displayName||model.modelKey||"")+"  ·  "+(model.quantization?model.quantization.name:""));
-    if(model.contextLength) set("ctxmax",fmtK(model.contextLength)); }
-  const foot=srv&&srv.port?("127.0.0.1:"+srv.port):"127.0.0.1:1234"; set("footserver",foot);
+  // Model label: show the real model when one is loaded, otherwise clear it —
+  // never show a stale model from a previous session.
+  if(model&&(model.displayName||model.modelKey)){
+    set("modelname",(model.displayName||model.modelKey||"")+"  ·  "+(model.quantization?model.quantization.name:""));
+    if(model.contextLength) set("ctxmax",fmtK(model.contextLength));
+  } else if(srv&&srv.running){
+    set("modelname","no model loaded");
+  } else {
+    set("modelname","—  offline");
+  }
+  const foot=srv&&srv.port?(srv.running?("127.0.0.1:"+srv.port):("127.0.0.1:"+srv.port+"  ·  closed")):"127.0.0.1:1234"; set("footserver",foot);
 
   // uptime: derive from lastUsedTime delta so it ticks live
   if(st.uptime_sec!=null){
@@ -458,10 +467,16 @@ async function tick(){
       if(st.progress_fresh===true && st.prompt_progress!=null && st.prompt_progress<1)
         label += " · " + Math.round(st.prompt_progress*100) + "%";
       setPill("busy", label);
+    } else if(model&&(model.displayName||model.modelKey)){
+      setPill("ok", "READY · " + (model.status||"idle"));
     } else {
-      setPill("ok", "READY · " + (model?(model.status||"idle"):"idle"));
+      // App is up but nothing is loaded — a distinct amber state so it's not
+      // mistaken for a ready model.
+      setPill("idle", "RUNNING · no model");
     }
-  } else { setPill("off","SERVER OFF"); }
+  } else {
+    setPill("off", "LM STUDIO OFFLINE");
+  }
 
   const g=st.gpu;
   if(g){

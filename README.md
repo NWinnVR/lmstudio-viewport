@@ -6,7 +6,7 @@
 
 `Python` · `no API token` · `no second model` · `local-only` · `MIT`
 
-[![version](https://img.shields.io/badge/version-1.1.0-22d3ee)]()
+[![version](https://img.shields.io/badge/version-1.2.0-22d3ee)]()
 [![python](https://img.shields.io/badge/python-3.8+-3776ab)]()
 [![license](https://img.shields.io/badge/license-MIT-2dd484)]()
 
@@ -39,7 +39,7 @@ generation feed, and live-editable settings + data panels.
 ## Quick start
 
 ### Requirements
-- **LM Studio** installed and running (this is what we read — nothing else needed)
+- **LM Studio** installed — the dashboard works whether the app is **open or closed**: it reports `OFFLINE` when the app is down and keeps showing GPU / RAM / energy either way (you can leave it running for non-AI monitoring)
 - **Python 3.8+** on your `PATH`
 - **NVIDIA GPU** (for the GPU/VRAM/temp/draw tiles via `nvidia-smi`) — optional but recommended
 - **`psutil`** (optional) — enables the *System RAM* tile. Without it that one tile is hidden and everything else works.
@@ -76,11 +76,21 @@ To stop it: click the **✖** button in the viewport header (your model/server k
 ### Header · status, model, uptime, totals
 ![header](docs/header.png)
 
-Left to right: the **status pill** (`GENERATING` while the model is working,
-`READY` when it's idle and waiting for input), the **loaded model**, how long
-it's been loaded, **all-time tokens**, **all-time electricity cost**, and
-**$ Saved** (estimated savings vs. running the same tokens on a frontier API,
-counted only while the GPU was actively working).
+Left to right: the **status pill**, the **loaded model**, how long it's been
+loaded, **all-time tokens**, **all-time electricity cost**, and **$ Saved**
+(estimated savings vs. running the same tokens on a frontier API, counted only
+while the GPU was actively working).
+
+The pill has **three states** plus a live one:
+
+| Pill | Meaning |
+|---|---|
+| 🟩 `READY` / `GENERATING` | model loaded — idle / actively producing |
+| 🟧 `RUNNING · no model` | LM Studio is open but nothing is loaded |
+| 🟥 `LM STUDIO OFFLINE` | the app is closed |
+
+…and the **model label** beside it updates to whatever is actually loaded,
+clearing to *no model loaded* when nothing is (it never shows a stale model).
 
 ### Live tiles · the real-time needles
 ![live tiles](docs/live-tiles.png)
@@ -169,6 +179,13 @@ streams LM Studio is already producing:
 Everything is local (`127.0.0.1`), argument-list subprocesses (no shell
 strings), and the process is windowless so it sits quietly in the background.
 It binds to **127.0.0.1 only** — nothing is exposed to your network.
+
+**It can never relaunch the app.** Every `lms` call is gated behind a passive
+TCP probe to LM Studio's port `:1234` — a socket connect can't start a process.
+So with the app closed the dashboard makes **zero** `lms` invocations (which is
+exactly what used to wake the LM Studio GUI) and simply reports `OFFLINE`.
+Keep the viewport open all day for GPU/RAM/energy monitoring and it will never
+pop the app back up.
 
 ### Privacy by design
 - No API key, no cloud, no telemetry sent anywhere.

@@ -31,6 +31,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -56,7 +57,7 @@ PORT = int(os.environ.get("VIEWPORT_PORT", "18022"))
 # Single source of truth for the release version (semver). Bump here; it is
 # surfaced via /api/status and in the README. Policy: minor bump for fixes/adds,
 # major only on explicit intent.
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
 LIFETIME = os.path.join(HERE, "lifetime.jsonl")
@@ -176,11 +177,58 @@ def run_json(cmd, timeout=15):
         return None
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# PASSIVE app-presence probe.
+#
+# Why this exists: `lms` auto-launches the LM Studio GUI when the app is closed
+# (LM Studio docs: "If LM Studio isn't already running when you run an lms
+# command, it will start running automatically"). So shelling to `lms` in a
+# poll loop was the *relaunch trigger* — the very thing that kept opening the
+# app after Nadia closed it. A bare TCP connect to :1234 is purely passive: it
+# can NEVER start a process. We use it as the gate for every `lms` call.
+#   app up   → lms talks to the already-running server (no relaunch)
+#   app down → we make NO lms call at all (no relaunch), report OFFLINE.
+# ────────────────────────────────────────────────────────────────────────────
+_LMS_HOST = "127.0.0.1"
+_LMS_PORT = 1234
+
+
+def _lms_up(host=_LMS_HOST, port=_LMS_PORT, timeout=1.2):
+    """Return True if something is listening on the LM Studio HTTP port.
+
+    A socket connect is side-effect free — it can't launch the app — so it is
+    the ONLY safe way to ask 'is LM Studio running?' from here.
+    """
+    try:
+        s = socket.create_connection((host, port), timeout=timeout)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
 def server_status():
-    return run_json([LMS, "server", "status", "--json"]) if LMS else None
+    # Passive gate first: never shell out to `lms` (which would auto-launch the
+    # GUI) unless the server port is already live.
+    if not _lms_up():
+        return {"running": False, "port": _LMS_PORT}
+    out = run_json([LMS, "server", "status", "--json"]) if LMS else None
+    if not isinstance(out, dict):
+        # Port is up but we couldn't parse status — still report "running" so
+        # the UI reflects the live server rather than flashing OFFLINE.
+        return {"running": True, "port": _LMS_PORT}
+    if "running" not in out:
+        out["running"] = True
+    if not out.get("port"):
+        out["port"] = _LMS_PORT
+    return out
 
 
 def model_info():
+    # Same passive gate as server_status(): only talk to `lms` when the app is
+    # already up, so a closed app is never re-opened by this poll.
+    if not _lms_up():
+        return None
     if not LMS:
         return None
     ps = run_json([LMS, "ps", "--json"], timeout=20)
@@ -388,6 +436,11 @@ def model_stream_loop():
     if not LMS:
         return
     while not _dying:
+        # Passive gate: if LM Studio isn't already running, a `lms` spawn would
+        # auto-launch the GUI (the exact bug we're fixing). Just wait quietly.
+        if not _lms_up():
+            time.sleep(2)
+            continue
         p = None
         try:
             p = subprocess.Popen([LMS, "log", "stream", "--json", "--stats",
@@ -431,6 +484,11 @@ def runtime_stream_loop():
     if not LMS:
         return
     while not _dying:
+        # Passive gate: if LM Studio isn't already running, a `lms` spawn would
+        # auto-launch the GUI. Wait quietly instead of triggering it.
+        if not _lms_up():
+            time.sleep(2)
+            continue
         p = None
         try:
             p = subprocess.Popen([LMS, "log", "stream", "--json", "--source", "runtime"],
