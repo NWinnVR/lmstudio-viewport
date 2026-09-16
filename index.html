@@ -356,6 +356,7 @@
       </div>
       <div class="ctl" style="margin-top:10px">
         <button class="mini" id="ph_enable" title="set a token + bind 0.0.0.0 so the phone can reach it (needs a restart to apply)">enable phone mode</button>
+        <button class="mini" id="ph_regen" style="display:none" title="mint a fresh strong token + refresh this browser's copy (no restart needed for the token)">↻ regenerate token</button>
         <button class="mini" id="ph_disable" title="remove the token + bind back to 127.0.0.1 (needs a restart)">disable</button>
         <button class="mini" id="ph_copyurl" title="copy the LAN url to the clipboard">copy url</button>
         <button class="mini" id="ph_copytok" title="copy the token (paste into the phone's field)">copy token</button>
@@ -429,17 +430,34 @@ async function refreshPhone(){
   $("ph_token").value = localStorage.getItem("viewport_token")||"";
   const lan = (s.token_enabled || s.bound==="0.0.0.0");   // token is set immediately; bind applies on restart
   $("ph_enable").style.display  = lan ? "none":"";
+  $("ph_regen").style.display   = lan ? "":"none";
   $("ph_disable").style.display = lan ? "":"none";
 }
-$("ph_enable").onclick=async()=>{
-  if(!confirm("Enable phone mode?\n\nSets a token + binds the viewport to your LAN (0.0.0.0).\nRead-only stays open to the LAN; the 3 write buttons need the token.\nThen run the shown firewall command once in an admin prompt.")) return;
-  const tok=(crypto.getRandomValues(new Uint32Array(6))).map(n=>n.toString(16).padStart(8,"0")).join("").slice(0,24);
-  localStorage.setItem("viewport_token",tok);
+$("ph_regen").onclick=async()=>{
+  if(!confirm("Generate a fresh strong token?\n\nThe current one stops working everywhere (PC + phone) — re-copy the url after this.\nThe box owner (you) can do this without a valid token; a remote device cannot.")) return;
   try{
     const r=await j("/api/lan",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({token:tok,enable_lan:true})});
-    toast("phone mode configured — restart the viewport to apply the LAN bind","ok");
+      body:JSON.stringify({regenerate:true})});
+    const tok=r.token||"";
+    if(!tok){ toast("regenerate failed: server returned no token","err"); return; }
+    localStorage.setItem("viewport_token",tok);
     $("ph_token").value=tok;
+    toast("new strong token generated — copy the url again to share it","ok");
+  }catch(e){ toast("regenerate failed: "+e.message,"err"); }
+  refreshPhone();
+};
+$("ph_enable").onclick=async()=>{
+  if(!confirm("Enable phone mode?\n\nThe viewport will mint a strong token (server-side) and bind to your LAN (0.0.0.0).\nRead-only stays open to the LAN; the 3 write buttons need the token.\nThen run the shown firewall command once in an admin prompt.")) return;
+  try{
+    // No client-side token generation — the SERVER mints a strong one and
+    // returns it (a broken browser RNG is exactly what produced '000000').
+    const r=await j("/api/lan",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:"",enable_lan:true})});
+    const tok=r.token||"";
+    if(!tok){ toast("enable failed: server returned no token","err"); return; }
+    localStorage.setItem("viewport_token",tok);
+    $("ph_token").value=tok;
+    toast(r.generated?"phone mode on — a strong token was generated; restart the viewport to apply the LAN bind":"phone mode configured — restart to apply the LAN bind","ok");
     if(r.firewall){ $("ph_fw").style.display=""; $("ph_fwc").value=r.firewall; }
   }catch(e){ toast("enable failed: "+e.message,"err"); }
   refreshPhone();

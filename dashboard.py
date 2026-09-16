@@ -37,6 +37,7 @@ import sys
 import threading
 import time
 import hmac
+import secrets
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -63,7 +64,7 @@ BIND_HOST = os.environ.get("VIEWPORT_BIND", "127.0.0.1")
 # Single source of truth for the release version (semver). Bump here; it is
 # surfaced via /api/status and in the README. Policy: minor bump for fixes/adds,
 # major only on explicit intent.
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
 LIFETIME = os.path.join(HERE, "lifetime.jsonl")
@@ -130,21 +131,63 @@ def _read_bind_file():
     except Exception:
         return "127.0.0.1"
 
-def set_lan_token(tok, enable_lan=None):
-    """Set/clear the write token and (optionally) the LAN bind.
+def strong_token():
+    """A cryptographically-strong token, generated SERVER-side (never in the
+    browser, so a broken/quirky client RNG can never produce a weak one).
+    24 hex chars == 96 bits of entropy — overkill for a LAN write-gate."""
+    return secrets.token_hex(12)
 
-    - ``tok``: the token string, or empty/None to clear it.
-    - ``enable_lan``: True → bind 0.0.0.0; False → bind 127.0.0.1; None → leave.
+def _token_weak(tok) -> bool:
+    """True if a candidate token is too weak to act as a master key.
+    Catches the real footgun (all-zeros / all-same-char / trivially short)."""
+    t = (tok or "").strip()
+    if len(t) < 8:
+        return True
+    if len(set(t)) <= 1:          # all the same char (e.g. "000000")
+        return True
+    if t.isdigit() and len(set(t)) <= 2:   # e.g. "000011", "111122"
+        return True
+    return False
 
-    Returns (token, lan_url, bind). The bind change takes effect on the NEXT
-    start (call /api/exit to restart; the watchdog relaunches it). The token
-    applies immediately — it's read from disk per request.
+def set_lan_token(tok=None, enable_lan=None, regenerate=False):
+    """Manage the write token + LAN bind. Three clean actions:
+
+    - ``enable_lan=True``  → LAN mode ON. Bind 0.0.0.0. Mint a STRONG token
+      (or keep the caller's strong one). Returns it so the client stores it.
+    - ``regenerate=True``  → mint a FRESH strong token (keep LAN on). Use when
+      the current one is lost / stale / weak. The owner (local) can always do
+      this; a remote device cannot.
+    - ``enable_lan=False`` → LAN mode OFF. Clear the token, bind 127.0.0.1.
+
+    ``tok`` is honored only when it's strong (enabling/regenerating with a
+    weak value still mints a fresh strong one, so '000000' can never be stored
+    as the master key). The bind change applies on the next start (watchdog
+    relaunches); the token applies immediately (read from disk per request).
     """
     tok = (tok or "").strip()
-    if enable_lan is None:
-        b = _read_bind_file()
+    generated = False
+    if regenerate:
+        # Always mint fresh — the whole point is a new, guaranteed-strong value.
+        tok = strong_token()
+        generated = True
+        b = "0.0.0.0"          # regenerate presupposes LAN mode is wanted
+    elif enable_lan is True:
+        if not tok or _token_weak(tok):
+            tok = strong_token()
+            generated = True
+        b = "0.0.0.0"
+    elif enable_lan is False:
+        tok = ""
+        b = "127.0.0.1"
     else:
-        b = "0.0.0.0" if enable_lan else "127.0.0.1"
+        # No explicit action: just (re)validate + store the given token if strong.
+        if tok and _token_weak(tok):
+            raise ValueError("token too weak (need >=8 chars, not all the same)")
+        b = _read_bind_file()
+        if not tok:
+            tok = _read_token_file() or ""
+
+    if b in ("0.0.0.0", "127.0.0.1"):
         try:
             with open(os.path.join(HERE, "settings.json"), encoding="utf-8") as f:
                 d = json.loads(f.read())
@@ -155,8 +198,8 @@ def set_lan_token(tok, enable_lan=None):
             f.write(json.dumps(d, indent=2) + "\n")
     _write_token_file(tok or None)
     fw = (netsh_fw_command(PORT) if b == "0.0.0.0" else None)
-    return {"token": tok or None, "lan_url": _lan_url(), "bound_now": _read_bind_file(),
-            "bound_next": b, "firewall": fw}
+    return {"token": tok or None, "generated": generated, "lan_url": _lan_url(),
+            "bound_now": _read_bind_file(), "bound_next": b, "firewall": fw}
 
 def netsh_fw_command(port=18022):
     """The admin console command that opens the port to PRIVATE networks only
@@ -202,19 +245,65 @@ def _write_token_file(tok):
 def token_enabled():
     return bool(_read_token_file())
 
-def check_write_token(headers) -> bool:
-    """True if the request is allowed to hit a write endpoint.
+def _heal_weak_token():
+    """If the stored token is weak (e.g. the client RNG's '000000' footgun),
+    replace it with a strong server-generated one so a trivial value can never
+    act as the master key. Returns the new token (or None if nothing to heal).
+    Run once at startup, before serving."""
+    cur = _read_token_file()
+    if not cur or not _token_weak(cur):
+        return None
+    new = strong_token()
+    _write_token_file(new)
+    log("WARN: stored write token was weak (%s); replaced with a fresh strong one" % cur)
+    return new
 
-    If no token is configured (desktop-only default) -> allow (back-compat).
-    Otherwise the X-Viewport-Token header must match (constant-time compare).
+def allow_write(client_ip, headers) -> bool:
+    """True if this client may hit a write endpoint (/api/settings, /api/exit,
+    /api/compact, /api/lan).
+
+    The OWNER — a request from this box (loopback, or this machine's own IP) —
+    is ALWAYS allowed. This is what kills the lockout class entirely: the
+    desktop's write buttons and token management work no matter what token is
+    stored (fresh, stale, or the old '000000' footgun), and a weak stored
+    token can never act as a master key.
+
+    A REMOTE client (the phone, or any other LAN device) needs a valid STRONG
+    token in X-Viewport-Token (constant-time compare). A weak/missing token
+    means 'disabled' — remote writes are blocked, and the owner can always
+    mint a fresh one. Read-only endpoints never hit this gate.
     """
-    expected = _read_token_file()
-    if not expected:
+    if _is_local_client(client_ip):
         return True
+    expected = _read_token_file()
+    if not expected or _token_weak(expected):
+        return False
     supplied = (headers.get(TOKEN_HEADER) or "").strip()
     if not supplied:
         return False
     return hmac.compare_digest(supplied, expected)
+
+def _local_client_ips():
+    """The box's own IPv4 addresses (loopback + its LAN IP) — used to treat a
+    request as coming from the OWNER (local machine) vs a remote device."""
+    global _LOCAL_IPS
+    if _LOCAL_IPS is not None:
+        return _LOCAL_IPS
+    ips = {"127.0.0.1", "::1"}
+    try:
+        _, _, addrs = socket.gethostbyname_ex(socket.gethostname())
+        ips.update(a for a in addrs if a.startswith("192.") or a.startswith("10.") or a.startswith("172."))
+    except Exception:
+        pass
+    _LOCAL_IPS = ips
+    return ips
+
+_LOCAL_IPS = None
+
+def _is_local_client(client_ip) -> bool:
+    """True if the request's source is the local owner (loopback / own IP), not
+    a remote LAN device."""
+    return (client_ip or "") in _local_client_ips()
 
 def _resolve_bind():
     """Bind address: VIEWPORT_BIND env wins; else 'bind' in settings.json;
@@ -1591,15 +1680,11 @@ class Handler(BaseHTTPRequestHandler):
         # configured (LAN mode) the X-Viewport-Token header must match.
         # Read-only endpoints (and the desktop-only default, no token) pass.
         if self.path in ("/api/settings", "/api/exit", "/api/compact", "/api/lan"):
-            expected = _read_token_file()
-            if expected:
+            if not allow_write(self.client_address[0], self.headers):
                 supplied = (self.headers.get(TOKEN_HEADER) or "").strip()
-                if not supplied:
-                    self._json(401, {"error": "token required (X-Viewport-Token)"})
-                    return
-                if not hmac.compare_digest(supplied, expected):
-                    self._json(403, {"error": "invalid token"})
-                    return
+                self._json(401 if not supplied else 403,
+                           {"error": "token required (X-Viewport-Token)" if not supplied else "invalid token"})
+                return
         if self.path == "/api/lan":
             # set/clear the write token + LAN bind (token-gated once one is set)
             try:
@@ -1611,8 +1696,9 @@ class Handler(BaseHTTPRequestHandler):
             enable_lan = d.get("enable_lan")
             if enable_lan is not None and not isinstance(enable_lan, bool):
                 enable_lan = None
+            regenerate = d.get("regenerate") is True
             try:
-                self._json(200, set_lan_token(d.get("token"), enable_lan))
+                self._json(200, set_lan_token(d.get("token"), enable_lan, regenerate))
             except Exception as e:
                 self._json(500, {"error": str(e)})
             return
@@ -1674,6 +1760,7 @@ def main():
         % (bind, PORT, LMS, bool(psutil)))
     _load_settings()   # apply any user-tweaked knobs from settings.json
     ensure_ledger()    # seed the durable all-time ledger once (idempotent)
+    _heal_weak_token() # auto-replace a weak stored token (e.g. '000000') with a strong one
     for tgt, name in [(model_stream_loop, "model-stream"),
                       (runtime_stream_loop, "runtime-stream"),
                       (poll_loop, "poll"),
