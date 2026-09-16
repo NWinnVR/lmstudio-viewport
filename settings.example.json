@@ -1,6 +1,9 @@
 {
   "cost_per_kwh": 0.1834,
   "cpu_w": 65.0,
+  "platform_w": 25.0,
+  "psu_eff": 90.0,
+  "lhm_port": 8085,
   "frontier_in": 3.2,
   "frontier_out": 13.8,
   "idle_power_w": 110.0,

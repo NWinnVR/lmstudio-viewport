@@ -28,6 +28,10 @@ _spark.txt
 .venv/
 venv/
 
+# Vendored LibreHardwareMonitor — a ~11MB binary blob, NOT committed.
+# Reproduce it with `python fetch_lhm.py` (see README "CPU power sensors").
+vendor/
+
 # OS cruft
 .DS_Store
 Thumbs.db

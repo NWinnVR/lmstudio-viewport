@@ -284,7 +284,7 @@
       <table id="daystbl">
         <thead><tr>
           <th>day</th><th>gens</th><th>tokens</th><th>avg t/s</th><th>peak t/s</th><th>TTFT</th>
-          <th>gpu</th><th>vram</th><th>cpu</th><th>ram</th><th>avg W</th>
+          <th>gpu</th><th>vram</th><th>cpu</th><th title="avg CPU package power that day (live via LibreHardwareMonitor, — if it wasn't running)">cpu W</th><th>ram</th><th title="avg GPU draw that day (nvidia-smi)">gpu W</th>
           <th title="time the model was actively working that day (GPU above the idle threshold)">active</th>
           <th>kWh</th><th title="total electricity cost that day (all time, incl. parked)">cost</th>
           <th title="electricity cost for the time it was actively working only">$ active</th>
@@ -321,7 +321,10 @@
       <h3>⚙ settings</h3>
       <div class="kvrow">
         <div class="field"><label for="sg_cost">rate ¢/kWh</label><input type="number" step="0.01" min="0" id="sg_cost"></div>
-        <div class="field"><label for="sg_cpuw">cpu W (est.)</label><input type="number" step="1" min="0" id="sg_cpuw" title="flat CPU+platform wattage estimate added into the kWh math (Windows can't meter CPU power directly)"></div>
+        <div class="field" title="the non-CPU / non-GPU draw — board, RAM, SSDs, HDDs, fans. Defaulted to a conservative estimate of this box. GPU + CPU are measured live; this is the rest."><label for="sg_platform">rest-of-system W</label><input type="number" step="1" min="0" id="sg_platform" value="25" title="whole-system draw EXCLUDING CPU + GPU (board, RAM, drives, fans). Added into every kWh calc."></div>
+        <div class="field"><label for="sg_psu">PSU eff %</label><input type="number" step="1" min="50" max="100" id="sg_psu" value="90" title="your PSU's efficiency at your typical load. 80+ Platinum ≈ 90% (lower at the low loads this box mostly sits at). Wall draw = components ÷ (eff/100)."></div>
+        <div class="field"><label for="sg_cpuw">CPU W (fallback)</label><input type="number" step="1" min="0" id="sg_cpuw" value="65" title="used ONLY when LibreHardwareMonitor isn't reporting live CPU watts. Normally ignored."></div>
+        <div class="field"><label for="sg_lhmport">LHM port</label><input type="number" step="1" min="1" max="65535" id="sg_lhmport" value="8085" title="LibreHardwareMonitor web-server port (Options → Remote Web Server)."></div>
         <div class="field"><label for="sg_fin">frontier in $/M</label><input type="number" step="0.1" min="0" id="sg_fin" title="avg input-token price of a frontier API — used to compute $ saved"></div>
         <div class="field"><label for="sg_fout">frontier out $/M</label><input type="number" step="0.1" min="0" id="sg_fout" title="avg output-token price of a frontier API — used to compute $ saved"></div>
         <div class="field"><label for="sg_idle">idle W threshold</label><input type="number" step="5" min="0" id="sg_idle" title="GPU draw below this = 'not working'. Gates $ saved + active-time. Raise if your idle draw is higher; lower if it's lower."></div>
@@ -845,10 +848,12 @@ async function tickLifetime(){
     { label: "power",     color: "#ff8a5c", unit: "W",   range: [0, 450], pts: pw },
   ]);
 
-  // ── CPU util (% 0-100) ──
+  // ── CPU: util (% 0-100) + live package power (W, orange — LHM) ──
   const cu = toPts(await J("cpu_util"));
+  const cwp = toPts(await J("cpu_w"));
   renderChart($("lg_cpu"), [
-    { label: "cpu util", color: "#ff3b3b", unit: "%", range: [0, 100], pts: cu },
+    { label: "cpu util",  color: "#ff3b3b", unit: "%", range: [0, 100], pts: cu },
+    { label: "cpu power", color: "#ff8a5c", unit: "W", range: [0, 160], pts: cwp },
   ]);
 
   // ── RAM (% 0-100) ──
@@ -877,8 +882,8 @@ async function tickLifetime(){
     'vram '+fmt(lt.vram_pct,"%") + ' &nbsp;·&nbsp; ' +
     'power '+fmt(lt.power_w," W");
   $("ls_gpu").title = "sample counts (n) — gpu "+nOf(lt.gpu_util)+" · vram "+nOf(lt.vram_pct)+" · power "+nOf(lt.power_w);
-  $("ls_cpu").innerHTML = 'cpu '+fmt(lt.cpu_util,"%");
-  $("ls_cpu").title = "sample count (n) "+nOf(lt.cpu_util);
+  $("ls_cpu").innerHTML = 'cpu '+fmt(lt.cpu_util,"%") + ' &nbsp;·&nbsp; ' + 'pkg '+fmt(lt.cpu_w," W");
+  $("ls_cpu").title = "sample counts (n) — cpu util "+nOf(lt.cpu_util)+" · cpu package power "+nOf(lt.cpu_w);
   $("ls_ram").innerHTML = 'ram '+fmt(lt.ram_pct,"%");
   $("ls_ram").title = "sample count (n) "+nOf(lt.ram_pct);
 }
@@ -901,7 +906,7 @@ async function hist(){
   let days=[];
   try{ days=(await j("/api/history?days="+histDays)).days; }catch(e){return;}
   const body=$("daysbody");
-  if(!days.length){ body.innerHTML='<tr><td colspan="17" class="d">no history yet — accumulates as you use the box</td></tr>'; return; }
+  if(!days.length){ body.innerHTML='<tr><td colspan="18" class="d">no history yet — accumulates as you use the box</td></tr>'; return; }
   const money=v=>{ v=+v||0; if(v<1) return "$"+v.toFixed(3); if(v<1000) return "$"+v.toFixed(2); return "$"+Math.round(v).toLocaleString(); };
   body.innerHTML=days.slice().reverse().map(d=>
     '<tr><td class="d">'+esc(d.day)+'</td><td>'+d.gens+'</td>'
@@ -912,6 +917,7 @@ async function hist(){
     +'<td>'+(d.gpu_util!=null?d.gpu_util+"%":"—")+'</td>'
     +'<td>'+(d.vram_pct!=null?d.vram_pct+"%":"—")+'</td>'
     +'<td>'+(d.cpu_util!=null?d.cpu_util+"%":"—")+'</td>'
+    +'<td>'+(d.cpu_w!=null?d.cpu_w+"W":"—")+'</td>'
     +'<td>'+(d.ram_pct!=null?d.ram_pct+"%":"—")+'</td>'
     +'<td>'+(d.power_w!=null?d.power_w+"W":"—")+'</td>'
     +'<td title="'+(d.active_sec?Math.round(d.active_sec)+"s":"0s")+'">'+fmtHr(d.active_sec)+'</td>'
@@ -931,13 +937,16 @@ async function hist(){
 $("btnHistToday").onclick=()=>{ histDays=1; hist(); toast("showing today","ok"); };
 
 /* ───────────────────────── settings panel ───────────────────────── */
-const SG_DEFAULTS={ cost_per_kwh:0.1834, cpu_w:65, frontier_in:3.2, frontier_out:13.8, idle_power_w:110, lifetime_days:30 };
+const SG_DEFAULTS={ cost_per_kwh:0.1834, platform_w:25, psu_eff:90, cpu_w:65, lhm_port:8085, frontier_in:3.2, frontier_out:13.8, idle_power_w:110, lifetime_days:30 };
 let sgLoaded=false;
 async function loadSettings(){
   let s;
   try{ s=await j("/api/settings"); }catch(e){ return; }
   $("sg_cost").value  = (s.cost_per_kwh||0)*100;   // show as ¢/kWh
+  $("sg_platform").value = s.platform_w||25;
+  $("sg_psu").value  = s.psu_eff||90;
   $("sg_cpuw").value  = s.cpu_w||65;
+  $("sg_lhmport").value = s.lhm_port||8085;
   $("sg_fin").value   = s.frontier_in||3.2;
   $("sg_fout").value  = s.frontier_out||13.8;
   $("sg_idle").value  = s.idle_power_w||110;
@@ -947,7 +956,10 @@ async function loadSettings(){
 $("btnSaveSettings").onclick=async()=>{
   const payload={
     cost_per_kwh:+$("sg_cost").value/100||0.1834,
+    platform_w:+$("sg_platform").value||25,
+    psu_eff:+$("sg_psu").value||90,
     cpu_w:+$("sg_cpuw").value||65,
+    lhm_port:+$("sg_lhmport").value||8085,
     frontier_in:+$("sg_fin").value||3.2,
     frontier_out:+$("sg_fout").value||13.8,
     idle_power_w:+$("sg_idle").value||110,
@@ -960,8 +972,8 @@ $("btnSaveSettings").onclick=async()=>{
   }catch(e){ toast("save failed: "+e.message,"err"); }
 };
 $("btnResetSettings").onclick=()=>{
-  if(!confirm("Reset all settings to defaults?\n  rate 18.34¢/kWh (US avg) · cpu 65W · frontier $3.2/$13.8 · idle 110W · retain 30d")) return;
-  $("sg_cost").value=18.34; $("sg_cpuw").value=65; $("sg_fin").value=3.2; $("sg_fout").value=13.8; $("sg_idle").value=110; $("sg_days").value=30;
+  if(!confirm("Reset all settings to defaults?\n  rate 18.34¢/kWh (US avg) · rest-of-system 25W · PSU 90% · CPU fallback 65W · LHM port 8085 · frontier $3.2/$13.8 · idle 110W · retain 30d")) return;
+  $("sg_cost").value=18.34; $("sg_platform").value=25; $("sg_psu").value=90; $("sg_cpuw").value=65; $("sg_lhmport").value=8085; $("sg_fin").value=3.2; $("sg_fout").value=13.8; $("sg_idle").value=110; $("sg_days").value=30;
   $("btnSaveSettings").click();
 };
 

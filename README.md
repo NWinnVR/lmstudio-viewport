@@ -175,6 +175,7 @@ streams LM Studio is already producing:
 | `lms server status` / `lms ps` | server up/down, loaded model, context, queue |
 | `nvidia-smi` | GPU util / VRAM / temp / power draw |
 | `psutil` *(optional)* | system RAM |
+| **LibreHardwareMonitor** *(optional)* | **live CPU package watts** (see [CPU power](#cpu-power-optional)) |
 
 Everything is local, argument-list subprocesses (no shell strings), and the
 process is windowless so it sits quietly in the background.
@@ -195,6 +196,42 @@ pop the app back up.
   private-profile + token-gated — never internet-facing).
 - Everything the dashboard writes is git-ignored by default — clone the repo,
   run it, and your personal numbers never leave your machine.
+
+## CPU power (optional)
+
+The dashboard already meters **GPU** watts live (via `nvidia-smi`). For the
+**CPU** side, Windows won't expose package power to a plain process — but
+[LibreHardwareMonitor (LHM)](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+can, and it serves its sensors over a small local HTTP API. Point the viewport
+at it and the CPU-power line (orange, on the CPU graph) fills with **real
+watts** instead of the flat `cpu_w` fallback.
+
+It's **optional**: without LHM the viewport runs exactly as before, using the
+`cpu_w` estimate. With LHM, every energy integral (session, per-day, lifetime)
+switches to live CPU watts automatically — no extra config.
+
+### Setup (one-time, then it's hands-off)
+1. **Download LHM** into the project (already done if you pulled a fresh repo
+   that ships `vendor/`; otherwise):
+   ```
+   python fetch_lhm.py
+   ```
+2. **Start the sensor** — double-click `start_cpu_sensors.bat`. It:
+   - asks for **admin** (LHM needs it to read the CPU power MSRs — without it,
+     the CPU power sensor is simply absent),
+   - clears any stale LHM instance,
+   - launches LHM (it stays in the system tray),
+   - waits for the sensor server, then **prints the live CPU watts** as proof.
+3. **One click:** in the LHM window, click **Options ▸ Remote Web Server ▸ Run**.
+   The menu starts unchecked on purpose, so this is always exactly one click.
+   Close the console — LHM keeps running in the tray.
+
+Done. The viewport now reads live CPU watts. To stop the sensor later,
+double-click `stop_cpu_sensors.bat` (or exit LHM from its tray icon) — the
+viewport transparently falls back to the `cpu_w` estimate.
+
+**Port:** the sensor server listens on `8085` by default (change it in the
+Settings panel `lhm_port` *and* in LHM's Remote Web Server options to match).
 
 ## Phone / LAN (optional)
 
@@ -238,11 +275,20 @@ netsh advfirewall firewall delete rule name="Viewport-18022"
 | Knob | Default | Meaning |
 |---|---|---|
 | `cost_per_kwh` | `0.1834` | your electricity rate, $/kWh — **defaults to the US national residential average** (EIA, ~18.34¢ as of mid-2026); set it to your real rate in the Settings panel |
-| `cpu_w` | `65.0` | flat CPU+platform wattage estimate (not meterable on Windows) |
+| `cpu_w` | `65.0` | **CPU fallback** — used only when LibreHardwareMonitor isn't running (no live CPU watts). With LHM up, real CPU package watts are read live and this is ignored |
+| `platform_w` | `25.0` | "rest of system" draw (board, RAM, SSDs, HDDs, fans) — the non-CPU, non-GPU slice of the wall meter |
+| `psu_eff` | `90.0` | PSU efficiency %, applied to the whole system so component watts map to wall watts (80+ Platinum ≈ 90 at part load) |
+| `lhm_port` | `8085` | LibreHardwareMonitor sensor web-server port |
 | `frontier_in` | `3.2` | avg frontier API input price, $/M tokens (for `$ saved`) |
 | `frontier_out` | `13.8` | avg frontier API output price, $/M tokens |
 | `idle_power_w` | `110.0` | GPU draw below this = "not working" (gates `$ saved` + active time) |
 | `lifetime_days` | `30.0` | days of lifetime samples kept live before compacting to `archive/` |
+
+> **Power model.** The viewport meters the **wall** draw as
+> `(GPU_w + CPU_w + platform_w) / (psu_eff / 100)`. GPU watts come from
+> `nvidia-smi`; CPU watts come from LibreHardwareMonitor when it's running
+> (else the `cpu_w` fallback); `platform_w` is the everything-else slice.
+> All three are editable in the Settings panel.
 
 Set them in the **Settings** panel, or create a `settings.json`
 (see [`settings.example.json`](settings.example.json)). Environment overrides:
@@ -258,6 +304,14 @@ run.sh                  Linux / macOS launcher
 settings.example.json   template for your settings.json
 requirements.txt        (optional) psutil
 docs/                   README screenshots
+
+# CPU power (optional — live CPU package watts)
+cpu_sensors.py          LHM setup/launch/verify helper (stdlib)
+start_cpu_sensors.bat   double-click → UAC → launches LHM + waits for the sensor
+stop_cpu_sensors.bat    double-click → force-kills LHM
+fetch_lhm.py            reproducible downloader for LibreHardwareMonitor (v0.9.6)
+_test_cpu_power.py      unit tests for the CPU-power reader + wall-watts math
+vendor/LibreHardwareMonitor/   the LHM binary (git-ignored; re-fetch via fetch_lhm.py)
 ```
 
 ## API (if you want to script against it)
@@ -285,6 +339,13 @@ docs/                   README screenshots
 - **`lms` not found** → set `LMSTUDIO_BIN` to the full path of your `lms` CLI,
   or ensure LM Studio's `bin` is on your `PATH`.
 - **Port already in use** → another viewport is running; or set `VIEWPORT_PORT=18023`.
+- **CPU power line is empty / flat** → LibreHardwareMonitor isn't running
+  (or isn't elevated). Double-click `start_cpu_sensors.bat`, then click
+  **Options ▸ Remote Web Server ▸ Run** in the LHM window. The viewport
+  falls back to the `cpu_w` estimate until LHM is up — it's not an error.
+- **`start_cpu_sensors.bat` times out** → port `8085` is held by something
+  else. Run `stop_cpu_sensors.bat` first, or change the port in LHM's
+  Remote Web Server options + the viewport's `lhm_port` setting to match.
 
 ## Contributing
 

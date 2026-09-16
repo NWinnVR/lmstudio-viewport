@@ -64,7 +64,7 @@ BIND_HOST = os.environ.get("VIEWPORT_BIND", "127.0.0.1")
 # Single source of truth for the release version (semver). Bump here; it is
 # surfaced via /api/status and in the README. Policy: minor bump for fixes/adds,
 # major only on explicit intent.
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
 LIFETIME = os.path.join(HERE, "lifetime.jsonl")
@@ -73,22 +73,41 @@ NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 PROCESS_START = time.time()
 
 # ── energy / cost knobs ──────────────────────────────────────────────────────
-# Your electricity rate and a conservative CPU/platform wattage estimate.
-# nvidia-smi reports GPU draw only; Windows can't reliably report CPU watts,
-# so we fold a flat platform estimate into the kWh integral.
+# Your electricity rate and the component power model.
+#
+# Wall-power model (per span):  ( GPU + CPU + rest-of-system ) / PSU_efficiency
+#   GPU  — measured live by nvidia-smi.
+#   CPU  — measured live via LibreHardwareMonitor (read_cpu_power below) when it's
+#          running; otherwise the `cpu_w` fallback (a CPU-only estimate).
+#   rest-of-system (`platform_w`) — board, RAM, SSDs, HDDs, fans (the non-CPU/
+#          non-GPU draw Nadia asked for in v1.4). Added on BOTH paths.
+#   PSU_efficiency — a 750W 80+ Platinum isn't 100% efficient; wall draw is a bit
+#          higher than the sum of component draws. Applied on BOTH paths.
+#   One formula for live and fallback -> cost numbers don't jump when LHM
+#   starts/stops.
 #
 # These are LIVE-TWEAKABLE: they persist to settings.json and are editable from
 # the dashboard's settings panel. `CFG` is the single source of truth at runtime.
 COST_PER_KWH   = 0.1834  # $/kWh — US national residential average (EIA, Sep 2026). Set yours in the settings panel.
-CPU_W_ESTIMATE = 65.0    # W — flat CPU+platform estimate (not meterable on Windows)
+CPU_W_ESTIMATE = 65.0    # W — CPU-only fallback when the live sensor is absent (typical 5700X3D load)
+PLATFORM_W     = 25.0    # W — "rest of system" (non-CPU, non-GPU): board, RAM, SSDs, HDDs, fans (day-avg, see skill)
+PSU_EFF_PCT    = 90.0    # % — PSU efficiency (80+ Platinum day-average; lower at the low loads this box mostly sits at)
 FRONTIER_IN    = 3.2     # $/M input tokens (avg frontier workhorse)
 FRONTIER_OUT   = 13.8    # $/M output tokens
 IDLE_POWER_W   = 110.0   # W — GPU draw below this = "not working" (gates $ Saved + active time)
 JS_PER_KWH = 3_600_000   # W·s = Joules, NOT Wh — /1000 gives a 3600× over-read (bit us once)
 
+# Live CPU package power (watts) is read from LibreHardwareMonitor's local web
+# server (a plain JSON sensor tree over HTTP). See read_cpu_power() below.
+LHM_HOST = "127.0.0.1"
+LHM_PORT = 8085          # LHM "Remote Web Server" default port (Options → Remote Web Server)
+
 CFG = {
     "cost_per_kwh":  COST_PER_KWH,
-    "cpu_w":         CPU_W_ESTIMATE,
+    "cpu_w":         CPU_W_ESTIMATE,   # W — CPU-only fallback when no live sensor
+    "platform_w":    PLATFORM_W,       # W — rest-of-system draw (non-CPU, non-GPU)
+    "psu_eff":       PSU_EFF_PCT,      # % — PSU efficiency (wall = components ÷ eff)
+    "lhm_port":      LHM_PORT,         # int — LHM web-server port
     "frontier_in":   FRONTIER_IN,
     "frontier_out":  FRONTIER_OUT,
     "idle_power_w":  IDLE_POWER_W,
@@ -484,6 +503,100 @@ def ram_stats():
         return None
 
 
+# -------------------------------------------------------- CPU package power
+def _lhm_search_power(node, name):
+    """Recursively find the node named `name` that is a POWER reading (not the
+    same-named Temperature/Clock sensor) and return its numeric wattage; None
+    if not present in this subtree.
+
+    LHM exposes BOTH a "CPU Package" *Power* sensor and a "CPU Package"
+    *Temperature* sensor, so a naive name-only match grabs the wrong one. We
+    disambiguate two ways, so it works across LHM builds:
+      · modern (v0.9.x): node has Type=="Power" and a clean numeric RawValue;
+      · older/Claude's shape: no Type field — then we sniff the formatted Value
+        ("52.3 W" is power, "61.7 °C" is temp, "4.2 MHz" is a clock).
+    `RawValue` is preferred over `Value` (no locale/string parsing needed)."""
+    if isinstance(node, dict) and node.get("Text") == name:
+        is_power = node.get("Type") == "Power"
+        if not is_power:
+            val = str(node.get("Value", "")).strip().lower()
+            is_power = val.endswith("w") or val.endswith("watts")
+        if is_power:
+            rv = node.get("RawValue")
+            if (isinstance(rv, (int, float)) and not isinstance(rv, bool)
+                    and rv == rv and rv >= 0):   # numeric, non-NaN, >= 0
+                return float(rv)
+            try:
+                return float(str(node.get("Value", "")).strip().split()[0])
+            except Exception:
+                return None
+    for ch in (node.get("Children") if isinstance(node, dict) else None) or []:
+        found = _lhm_search_power(ch, name)
+        if found is not None:
+            return found
+    return None
+
+
+def read_cpu_power(timeout=0.8):
+    """Current CPU package power in watts, read from LibreHardwareMonitor's
+    local web server (http://<host>:<port>/data.json). Pure stdlib (urllib +
+    json) — no extra dependency.
+
+    Returns a float (e.g. 45.2) or **None** when it can't read a value:
+      · LHM not running / web server off  -> connection refused
+      · LHM running WITHOUT admin rights   -> the "CPU Package" Power sensor is
+        absent from the tree entirely (not zero — missing)
+    The caller falls back to the flat `cpu_w` estimate when this is None, so a
+    dead sensor can never zero out the CPU contribution of a real load.
+    """
+    import urllib.request
+    port = int(CFG.get("lhm_port", LHM_PORT))
+    url = "http://%s:%d/data.json" % (LHM_HOST, port)
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            tree = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+    for sensor in ("CPU Package", "CPU Core", "CPU"):
+        w = _lhm_search_power(tree, sensor)
+        if w is not None:
+            return w
+    return None
+
+
+def _wall_watts(gpu_w, cpu_w):
+    """Convert (measured GPU watts, measured CPU watts) into an ESTIMATE OF WALL
+    draw in watts, using the live settings.
+
+    One formula for both paths so the number is stable whether or not the live
+    CPU sensor is up (no silent jump when LHM starts/stops):
+
+        wall = ( GPU + CPU + rest-of-system ) / PSU_efficiency
+
+      · GPU  — measured live by nvidia-smi.
+      · CPU  — the live LibreHardwareMonitor reading, or the `cpu_w` fallback
+        estimate (a CPU-ONLY number) when the sensor is absent.
+      · rest-of-system (`platform_w`) — board, RAM, SSDs, HDDs, fans (the
+        non-CPU / non-GPU draw) — added on BOTH paths.
+      · PSU efficiency — a 750W 80+ Platinum loses a few %; wall draw is a bit
+        higher than the sum of component draws — applied on BOTH paths.
+
+    `cpu_w` here is a CPU-only figure (not a lump), so adding `platform_w` and
+    dividing by efficiency never double-counts.
+    """
+    eff = CFG.get("psu_eff", PSU_EFF_PCT) or 0.0
+    if eff <= 0:
+        eff = 1.0          # no efficiency set -> assume lossless (100%)
+    elif eff > 1.0:
+        eff = eff / 100.0  # a percent, e.g. 90 -> 0.90
+    # else: already a fraction in (0, 1], e.g. 0.90 -> 0.90, 1.0 -> 1.0
+    platform = CFG.get("platform_w", PLATFORM_W) or 0.0
+    cpu_fb = CFG.get("cpu_w", CPU_W_ESTIMATE) or 0.0
+    gpu = max(0.0, float(gpu_w or 0.0))
+    cpu = max(0.0, float(cpu_w if cpu_w is not None else cpu_fb))
+    return (gpu + cpu + platform) / eff
+
+
 # -------------------------------------------------------------- event stream
 def make_event(o, d):
     s = d.get("stats") or {}
@@ -801,6 +914,11 @@ def lifetime_sampler(interval=30):
             # cpu_percent baseline; the 3s rolling sampler feeds ROLL_CPU).
             if ROLL_CPU and ROLL_CPU[-1][1] is not None:
                 rec["cpu_util"] = ROLL_CPU[-1][1]
+            # live CPU package watts (orange line in the CPU graph + the
+            # energy integral). Absent (None) when LHM isn't running — the
+            # energy calc then falls back to the flat cpu_w estimate.
+            if ROLL_CPUW and ROLL_CPUW[-1][1] is not None:
+                rec["cpu_w"] = ROLL_CPUW[-1][1]
             # latest live inference perf (only when a generation produced a
             # FRESH tick this window, i.e. <60s old) — keeps the decode/prefill/
             # draft line persistent without drawing a misleading flat line at a
@@ -823,7 +941,8 @@ def lifetime_sampler(interval=30):
                         base_ts = _load_ledger().get("energy_last_ts")
                     base_ts = base_ts if base_ts else _last_fold["ts"]
                     if rec["ts"] > base_ts:
-                        _ledger_add_energy(rec["ts"], rec["power_w"], rec["ts"] - base_ts)
+                        _ledger_add_energy(rec["ts"], rec["power_w"], rec["ts"] - base_ts,
+                                           cpu=rec.get("cpu_w"))
             except Exception as e:
                 log("lifetime write failed: %s" % e)
             _last_fold["ts"] = rec["ts"]
@@ -837,6 +956,7 @@ ROLL_RAM = deque(maxlen=3600)      # (ts, ram%)
 ROLL_TEMP = deque(maxlen=3600)     # (ts, °C)
 ROLL_POWER = deque(maxlen=3600)    # (ts, W)
 ROLL_CPU = deque(maxlen=3600)      # (ts, cpu%) — single consumer of cpu_percent(None)
+ROLL_CPUW = deque(maxlen=3600)     # (ts, W)  — live CPU package watts from LHM (None if sensor absent)
 
 
 def rolling_sampler(interval=3):
@@ -861,6 +981,11 @@ def rolling_sampler(interval=3):
                 c = psutil.cpu_percent(None)
                 if c is not None:
                     ROLL_CPU.append((ts, round(c, 1)))
+            # live CPU package watts from LHM (best-effort; None when the sensor
+            # is absent — the sparkline just has a gap, nothing breaks).
+            cw = read_cpu_power()
+            if cw is not None:
+                ROLL_CPUW.append((ts, round(cw, 1)))
         except Exception as e:
             log("rolling sample error: %s" % e)
         time.sleep(interval)
@@ -903,10 +1028,11 @@ def metric_series(metric, range_key):
             # event-based (per-turn, from the model stream)
             evs = [e for e in EVENTS if e.get("ts") and e["ts"] >= lo and e.get(metric) is not None]
             samples = [(e["ts"], e[metric]) for e in evs]
-        elif metric in ("gpu_util", "vram_pct", "temp", "power", "ram_pct", "cpu_util"):
+        elif metric in ("gpu_util", "vram_pct", "temp", "power", "ram_pct", "cpu_util", "cpu_w"):
             roll = {"gpu_util": ROLL_GPU, "vram_pct": ROLL_VRAM,
                     "temp": ROLL_TEMP, "power": ROLL_POWER,
-                    "ram_pct": ROLL_RAM, "cpu_util": ROLL_CPU}.get(metric, ())
+                    "ram_pct": ROLL_RAM, "cpu_util": ROLL_CPU,
+                    "cpu_w": ROLL_CPUW}.get(metric, ())
             if range_sec and range_sec < 86400:
                 # short range -> rolling in-memory samples (3s cadence)
                 samples = [(t, v) for (t, v) in roll if t >= lo]
@@ -971,6 +1097,7 @@ def read_lifetime_metric(metric, lo):
         return out
     key = {"gpu_util": "gpu_util", "vram_pct": "vram_pct",
            "power": "power_w", "ram_pct": "ram_pct", "cpu_util": "cpu_util",
+           "cpu_w": "cpu_w",
            "decode_tps": "decode_tps", "prefill_tps": "prefill_tps",
            "draft_pct": "draft_pct"}.get(metric)
     try:
@@ -995,7 +1122,7 @@ def read_lifetime_metric(metric, lo):
 
 def lifetime(days=30):
     lo = time.time() - days * 86400
-    acc = {"gpu_util": [], "vram_pct": [], "power_w": [], "ram_pct": [], "cpu_util": []}
+    acc = {"gpu_util": [], "vram_pct": [], "power_w": [], "ram_pct": [], "cpu_util": [], "cpu_w": []}
     if os.path.exists(LIFETIME):
         try:
             with open(LIFETIME, encoding="utf-8") as f:
@@ -1021,7 +1148,7 @@ def lifetime(days=30):
                 "min": round(min(xs), 1), "n": len(xs)}
     return {"days": days, "gpu_util": _st(acc["gpu_util"]), "vram_pct": _st(acc["vram_pct"]),
             "power_w": _st(acc["power_w"]), "ram_pct": _st(acc["ram_pct"]),
-            "cpu_util": _st(acc["cpu_util"]),
+            "cpu_util": _st(acc["cpu_util"]), "cpu_w": _st(acc["cpu_w"]),
             "asof": time.time()}
 
 
@@ -1048,13 +1175,13 @@ def _lifetime_by_day():
                     continue
                 day = time.strftime("%Y-%m-%d", time.localtime(ts))
                 d = days.setdefault(day, {"gpu_util": [], "vram_pct": [], "power_w": [],
-                                          "cpu_util": [], "ram_pct": [], "series": []})
-                for k in ("gpu_util", "vram_pct", "cpu_util", "ram_pct"):
+                                          "cpu_util": [], "ram_pct": [], "cpu_w": [], "series": []})
+                for k in ("gpu_util", "vram_pct", "cpu_util", "ram_pct", "cpu_w"):
                     if o.get(k) is not None:
                         d[k].append(o[k])
                 if o.get("power_w") is not None:
                     d["power_w"].append(o["power_w"])
-                    d["series"].append((ts, o["power_w"]))
+                    d["series"].append((ts, o["power_w"], o.get("cpu_w")))
     except Exception as e:
         log("lifetime-by-day read failed: %s" % e)
     return days
@@ -1097,26 +1224,28 @@ def history(days=7):
                 r["n_ttft"] += 1
     ld = _lifetime_by_day()
     rate = CFG.get("cost_per_kwh", COST_PER_KWH)
-    cpuw = CFG.get("cpu_w", CPU_W_ESTIMATE)
     idle = CFG.get("idle_power_w", IDLE_POWER_W)
     fout = CFG.get("frontier_out", FRONTIER_OUT)
     out = []
     for day in sorted(dm):
         r = dm[day]
         L = ld.get(day, {"gpu_util": [], "vram_pct": [], "power_w": [],
-                         "cpu_util": [], "ram_pct": [], "series": []})
+                         "cpu_util": [], "ram_pct": [], "cpu_w": [], "series": []})
         def _avg(xs):
             return round(sum(xs) / len(xs), 1) if xs else None
-        # energy for the day: integrate the day's power series
+        # energy for the day: integrate the day's power series (real CPU watts
+        # when LHM recorded them, else the flat cpu_w fallback — _wall_watts).
         all_j = act_j = 0.0
         act_sec = 0.0
         prev = None
-        for (ts, pw) in sorted(L.get("series", [])):
+        for item in sorted(L.get("series", [])):
+            ts, pw = item[0], item[1]
+            cpu = item[2] if len(item) > 2 else None
             if prev is not None and ts > prev:
                 dt = ts - prev
-                all_j += (pw + cpuw) * dt
+                all_j += _wall_watts(pw, cpu) * dt
                 if pw >= idle:
-                    act_j += (pw + cpuw) * dt
+                    act_j += _wall_watts(pw, cpu) * dt
                     act_sec += dt
             prev = ts
         all_kwh = all_j / JS_PER_KWH
@@ -1132,7 +1261,7 @@ def history(days=7):
             "avg_ttft_ms": round(r["ttft_sum"] / r["n_ttft"] * 1000, 0) if r["n_ttft"] else None,
             "gpu_util": _avg(L["gpu_util"]), "vram_pct": _avg(L["vram_pct"]),
             "cpu_util": _avg(L["cpu_util"]), "ram_pct": _avg(L["ram_pct"]),
-            "power_w": _avg(L["power_w"]),
+            "power_w": _avg(L["power_w"]), "cpu_w": _avg(L.get("cpu_w") or []),
             "active_sec": round(act_sec, 0) if act_sec else 0,
             "active_min": round(act_sec / 60.0, 1) if act_sec else 0,
             "kwh": round(all_kwh, 4), "cost": day_cost,
@@ -1185,7 +1314,6 @@ def _integral_energy(lo=None):
     if not os.path.exists(LIFETIME):
         return 0.0, 0.0, 0.0, 0.0, None
     idle = CFG.get("idle_power_w", IDLE_POWER_W)
-    cpuw = CFG.get("cpu_w", CPU_W_ESTIMATE)
     prev = None
     try:
         with open(LIFETIME, encoding="utf-8") as f:
@@ -1200,15 +1328,16 @@ def _integral_energy(lo=None):
                 ts = o.get("ts"); pw = o.get("power_w")
                 if ts is None or pw is None:
                     continue
+                cpu = o.get("cpu_w")  # None -> _wall_watts uses the flat fallback
                 if lo and ts < lo:
                     prev = ts
                     continue
                 if prev is not None and ts > prev:
                     dt = ts - prev
-                    all_j += (pw + cpuw) * dt
+                    all_j += _wall_watts(pw, cpu) * dt
                     tot_sec += dt
                     if pw >= idle:
-                        act_j += (pw + cpuw) * dt
+                        act_j += _wall_watts(pw, cpu) * dt
                         act_sec += dt
                 prev = ts
                 last_ts = ts
@@ -1293,13 +1422,14 @@ def _ledger_add_event(ev):
             L["hist_hi_ts"] = ts
         _save_ledger(L)
 
-def _ledger_add_energy(ts, pw, dt):
+def _ledger_add_energy(ts, pw, dt, cpu=None):
     with _LEDGER_LOCK:
         L = _load_ledger()
-        L["all_kwh"] += (pw + CFG.get("cpu_w", CPU_W_ESTIMATE)) * dt / JS_PER_KWH
+        wall = _wall_watts(pw, cpu)
+        L["all_kwh"] += wall * dt / JS_PER_KWH
         L["total_sec"] += dt
         if pw >= CFG.get("idle_power_w", IDLE_POWER_W):
-            L["active_kwh"] += (pw + CFG.get("cpu_w", CPU_W_ESTIMATE)) * dt / JS_PER_KWH
+            L["active_kwh"] += wall * dt / JS_PER_KWH
             L["active_sec"] += dt
         L["energy_last_ts"] = ts
         _save_ledger(L)
@@ -1333,8 +1463,9 @@ def energy_cost():
                     if ts is None or pw is None:
                         prev = ts
                         continue
+                    cpu = o.get("cpu_w")  # None -> _wall_watts uses flat fallback
                     if ts >= PROCESS_START and prev is not None and ts > prev:
-                        sj += (pw + CFG.get("cpu_w", CPU_W_ESTIMATE)) * (ts - prev)
+                        sj += _wall_watts(pw, cpu) * (ts - prev)
                     prev = ts
         except Exception as e:
             log("session energy read failed: %s" % e)
@@ -1455,12 +1586,13 @@ def compact():
                     ts = o.get("ts"); pw = o.get("power_w")
                     if ts is None or pw is None:
                         prev = ts; continue
+                    cpu = o.get("cpu_w")  # None -> _wall_watts uses flat fallback
                     if prev is not None and ts > prev:
                         dt = ts - prev
-                        all_j += (pw + CFG.get("cpu_w", CPU_W_ESTIMATE)) * dt
+                        all_j += _wall_watts(pw, cpu) * dt
                         tot_sec += dt
                         if pw >= CFG.get("idle_power_w", IDLE_POWER_W):
-                            act_j += (pw + CFG.get("cpu_w", CPU_W_ESTIMATE)) * dt
+                            act_j += _wall_watts(pw, cpu) * dt
                             act_sec += dt
                     prev = ts
                 L["all_kwh"] = max(0.0, L["all_kwh"] - all_j / JS_PER_KWH)
