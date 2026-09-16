@@ -344,7 +344,27 @@
       <div class="ctl" style="margin-top:10px">
         <button class="mini" id="btnCompact" title="rotate samples older than the retention window into archive/. All-time totals survive (they live in ledger.json).">compact now</button>
       </div>
-      <div class="hnote">all-time tokens + energy live in <span class="key">ledger.json</span> — they survive restarts AND compaction. compact moves old samples to <span class="key">archive/</span> to keep files small.</div>
+      <div class="hnote">all-time tokens + energy live in <span class="key">ledger.json</span> — they survive restarts AND compaction. compact moves old samples to archive/ to keep files small.</div>
+    </div>
+
+    <div class="card" title="Open the viewport on your phone or any device on this network. Read-only stats are open to the LAN; the 3 write buttons (save / compact / close) are protected by the token.">
+      <h3>📱 phone / LAN</h3>
+      <div class="datarow"><span class="k">this box's LAN url</span><span class="v" id="ph_url" style="font-variant-numeric:tabular-nums">—</span></div>
+      <div class="field" style="margin-top:8px">
+        <label for="ph_token">write token <span style="opacity:.5">(gate for save · compact · close)</span></label>
+        <input type="text" id="ph_token" spellcheck="false" autocomplete="off" placeholder="(none — LAN mode off)" style="font-family:ui-monospace,monospace">
+      </div>
+      <div class="ctl" style="margin-top:10px">
+        <button class="mini" id="ph_enable" title="set a token + bind 0.0.0.0 so the phone can reach it (needs a restart to apply)">enable phone mode</button>
+        <button class="mini" id="ph_disable" title="remove the token + bind back to 127.0.0.1 (needs a restart)">disable</button>
+        <button class="mini" id="ph_copyurl" title="copy the LAN url to the clipboard">copy url</button>
+        <button class="mini" id="ph_copytok" title="copy the token (paste into the phone's field)">copy token</button>
+      </div>
+      <div id="ph_fw" style="display:none;margin-top:10px">
+        <div class="hnote" style="margin:0 0 5px">run this once in an <b>admin</b> prompt (opens the port to your home network only):</div>
+        <input type="text" id="ph_fwc" readonly spellcheck="false" style="font-family:ui-monospace,monospace;font-size:12px;width:100%">
+      </div>
+      <div class="hnote">read-only is open on the LAN; the 3 write buttons need the token. never internet-facing (private-profile firewall rule). the <b>firewall command</b> appears after you enable — run it once in an admin prompt.</div>
     </div>
   </div>
 
@@ -361,8 +381,18 @@
 <script>
 "use strict";
 const $=id=>document.getElementById(id);
-const j=async(url,opts)=>{const r=await fetch(url,opts);const d=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(d.error||("HTTP "+r.status));return d;};
+const j=async(url,opts)=>{
+  opts=opts||{};
+  // Flavor B: auto-attach the LAN write-token to every request (harmless if the
+  // server has no token set — it's ignored; required when LAN mode is on).
+  const vt=localStorage.getItem("viewport_token");
+  if(vt && !opts.headers) opts.headers={};
+  if(vt && opts.headers) opts.headers=Object.assign({},opts.headers,{"X-Viewport-Token":vt});
+  const r=await fetch(url,opts);
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(d.error||("HTTP "+r.status));
+  return d;
+};
 const toast=(m,k)=>{const t=$("toast");t.textContent=m;t.className="toast show "+(k||"");
   clearTimeout(toast._t);toast._t=setTimeout(()=>t.className="toast",k==="err"?6000:3200);};
 const esc=s=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
@@ -380,6 +410,54 @@ $("btnExit").onclick=()=>{
     setTimeout(()=>{document.body.style.opacity=".5";},600);
   }
 };
+
+/* ───────────────────────── 📱 phone / LAN ───────────────────────── */
+const cp=async(t)=>{ try{ await navigator.clipboard.writeText(t); toast("copied to clipboard","ok"); }
+  catch(e){ const i=document.createElement("input"); i.value=t; document.body.appendChild(i); i.select();
+    try{ document.execCommand("copy"); toast("copied","ok"); }catch(_){ toast("copy failed","err"); } i.remove(); } };
+// Phone onboarding: if the URL carries #token=… (from the PC's "copy url"),
+// auto-store it so the first write button works, then drop it from the address bar.
+(function(){
+  const m=/token=([A-Za-z0-9]+)/.exec(location.hash||"");
+  if(m){ localStorage.setItem("viewport_token",m[1]); history.replaceState(null,"",location.pathname+location.search); }
+})();
+const phoneUrl=()=>{ const base=location.protocol+"//"+location.hostname+":"+location.port;
+  const t=localStorage.getItem("viewport_token"); return base+(t?("#token="+t):""); };
+async function refreshPhone(){
+  let s; try{ s=await j("/api/lan"); }catch(e){ return; }
+  $("ph_url").textContent = phoneUrl();
+  $("ph_token").value = localStorage.getItem("viewport_token")||"";
+  const lan = (s.token_enabled || s.bound==="0.0.0.0");   // token is set immediately; bind applies on restart
+  $("ph_enable").style.display  = lan ? "none":"";
+  $("ph_disable").style.display = lan ? "":"none";
+}
+$("ph_enable").onclick=async()=>{
+  if(!confirm("Enable phone mode?\n\nSets a token + binds the viewport to your LAN (0.0.0.0).\nRead-only stays open to the LAN; the 3 write buttons need the token.\nThen run the shown firewall command once in an admin prompt.")) return;
+  const tok=(crypto.getRandomValues(new Uint32Array(6))).map(n=>n.toString(16).padStart(8,"0")).join("").slice(0,24);
+  localStorage.setItem("viewport_token",tok);
+  try{
+    const r=await j("/api/lan",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:tok,enable_lan:true})});
+    toast("phone mode configured — restart the viewport to apply the LAN bind","ok");
+    $("ph_token").value=tok;
+    if(r.firewall){ $("ph_fw").style.display=""; $("ph_fwc").value=r.firewall; }
+  }catch(e){ toast("enable failed: "+e.message,"err"); }
+  refreshPhone();
+};
+$("ph_disable").onclick=async()=>{
+  if(!confirm("Disable phone mode? Removes the token and binds back to 127.0.0.1 (restart to apply).")) return;
+  localStorage.removeItem("viewport_token");
+  try{
+    await j("/api/lan",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:"",enable_lan:false})});
+    toast("phone mode disabled — restart to apply","ok");
+  }catch(e){ toast("disable failed: "+e.message,"err"); }
+  $("ph_token").value=""; $("ph_fw").style.display="none";
+  refreshPhone();
+};
+$("ph_copyurl").onclick=async()=>{ cp(phoneUrl()); };
+$("ph_copytok").onclick=()=>{ const t=$("ph_token").value.trim(); if(t)cp(t); else toast("no token yet — enable phone mode first","err"); };
+refreshPhone();
 
 /* ───────────────────────── tile sparklines (SVG) ───────────────────────── */
 // Hand-rolled SVG: a viewBox stretched with preserveAspectRatio="none" fills the

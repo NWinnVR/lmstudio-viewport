@@ -6,7 +6,7 @@
 
 `Python` · `no API token` · `no second model` · `local-only` · `MIT`
 
-[![version](https://img.shields.io/badge/version-1.2.0-22d3ee)]()
+[![version](https://img.shields.io/badge/version-1.3.0-22d3ee)]()
 [![python](https://img.shields.io/badge/python-3.8+-3776ab)]()
 [![license](https://img.shields.io/badge/license-MIT-2dd484)]()
 
@@ -176,9 +176,10 @@ streams LM Studio is already producing:
 | `nvidia-smi` | GPU util / VRAM / temp / power draw |
 | `psutil` *(optional)* | system RAM |
 
-Everything is local (`127.0.0.1`), argument-list subprocesses (no shell
-strings), and the process is windowless so it sits quietly in the background.
-It binds to **127.0.0.1 only** — nothing is exposed to your network.
+Everything is local, argument-list subprocesses (no shell strings), and the
+process is windowless so it sits quietly in the background.
+It binds to **127.0.0.1 only** by default — nothing is exposed to your network
+unless you turn on [phone / LAN mode](#phone--lan-optional) below.
 
 **It can never relaunch the app.** Every `lms` call is gated behind a passive
 TCP probe to LM Studio's port `:1234` — a socket connect can't start a process.
@@ -190,9 +191,47 @@ pop the app back up.
 ### Privacy by design
 - No API key, no cloud, no telemetry sent anywhere.
 - All data (logs, ledger, settings, archives) stays in the project folder.
-- The server listens on `127.0.0.1` only.
+- The server listens on `127.0.0.1` only by default (opt-in LAN mode is
+  private-profile + token-gated — never internet-facing).
 - Everything the dashboard writes is git-ignored by default — clone the repo,
   run it, and your personal numbers never leave your machine.
+
+## Phone / LAN (optional)
+
+Open the dashboard on your phone or any device on your home network. It's
+**off by default** — the viewport stays `127.0.0.1`-only until you turn it on,
+and it **never goes to the internet** (the firewall rule is private-profile only).
+
+**How it's secured:** read-only stats are open to the LAN, but the three *write*
+buttons (save settings · compact · close) are gated by a **write token**. Anyone
+on the network can look at your telemetry; only a device that has the token can
+press a button.
+
+### Enable it (2 steps)
+1. In the dashboard, open the **📱 phone / LAN** card (settings drawer) and click
+   **enable phone mode**. This generates a token, binds the viewport to the LAN,
+   and shows the LAN url + the firewall command.
+2. Run the shown command **once, in an admin prompt** (it opens the port to your
+   home network only):
+   ```
+   netsh advfirewall firewall add rule name="Viewport-18022" dir=in action=allow protocol=TCP localport=18022 remoteip=LocalSubnet profile=private
+   ```
+   Then restart the viewport (the watchdog relaunches it with the new bind).
+
+### Open it on the phone
+Click **copy url** on the card and paste it into your phone's browser — the url
+carries the token (`…#token=…`), which the phone stores automatically on first
+load, so the write buttons work there too. (The phone's own "📱 phone / LAN"
+card also shows the token if you ever need to re-enter it.)
+
+### Disable it
+Click **disable** on the card — it clears the token and re-binds to `127.0.0.1`
+(restart to apply). To remove the firewall rule later:
+```
+netsh advfirewall firewall delete rule name="Viewport-18022"
+```
+
+---
 
 ## Configuration
 

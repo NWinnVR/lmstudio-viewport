@@ -36,6 +36,7 @@ import subprocess
 import sys
 import threading
 import time
+import hmac
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -54,10 +55,15 @@ if psutil is not None:
         pass
 
 PORT = int(os.environ.get("VIEWPORT_PORT", "18022"))
+# Bind address: "127.0.0.1" (default — desktop only, public-safe) or "0.0.0.0"
+# (opt-in LAN mode; pair with the viewport_token to gate the 3 write endpoints).
+# Overridable by VIEWPORT_BIND env var or the "bind" key in settings.json
+# (written by setup_phone.py). Resolved once at import; applied in main().
+BIND_HOST = os.environ.get("VIEWPORT_BIND", "127.0.0.1")
 # Single source of truth for the release version (semver). Bump here; it is
 # surfaced via /api/status and in the README. Policy: minor bump for fixes/adds,
 # major only on explicit intent.
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
 LIFETIME = os.path.join(HERE, "lifetime.jsonl")
@@ -115,6 +121,115 @@ def set_settings(d):
             CFG[k] = float(v)
     _save_settings()
     return dict(CFG)
+
+def _read_bind_file():
+    try:
+        with open(os.path.join(HERE, "settings.json"), encoding="utf-8") as f:
+            b = (json.loads(f.read()).get("bind") or "").strip()
+        return b if b in ("0.0.0.0", "127.0.0.1") else "127.0.0.1"
+    except Exception:
+        return "127.0.0.1"
+
+def set_lan_token(tok, enable_lan=None):
+    """Set/clear the write token and (optionally) the LAN bind.
+
+    - ``tok``: the token string, or empty/None to clear it.
+    - ``enable_lan``: True → bind 0.0.0.0; False → bind 127.0.0.1; None → leave.
+
+    Returns (token, lan_url, bind). The bind change takes effect on the NEXT
+    start (call /api/exit to restart; the watchdog relaunches it). The token
+    applies immediately — it's read from disk per request.
+    """
+    tok = (tok or "").strip()
+    if enable_lan is None:
+        b = _read_bind_file()
+    else:
+        b = "0.0.0.0" if enable_lan else "127.0.0.1"
+        try:
+            with open(os.path.join(HERE, "settings.json"), encoding="utf-8") as f:
+                d = json.loads(f.read())
+        except Exception:
+            d = {}
+        d["bind"] = b
+        with open(os.path.join(HERE, "settings.json"), "w", encoding="utf-8") as f:
+            f.write(json.dumps(d, indent=2) + "\n")
+    _write_token_file(tok or None)
+    fw = (netsh_fw_command(PORT) if b == "0.0.0.0" else None)
+    return {"token": tok or None, "lan_url": _lan_url(), "bound_now": _read_bind_file(),
+            "bound_next": b, "firewall": fw}
+
+def netsh_fw_command(port=18022):
+    """The admin console command that opens the port to PRIVATE networks only
+    (never Domain/Public). Run once in an ELEVATED prompt."""
+    rule = "Viewport-%d" % port
+    return ("netsh advfirewall firewall add rule name=\"%s\" "
+            "dir=in action=allow protocol=TCP localport=%d "
+            "remoteip=LocalSubnet program=NONE profile=private" % (rule, port))
+
+# ── LAN token (Flavor B) ─────────────────────────────────────────────────
+# A shared secret that gates the three WRITE endpoints (POST /api/settings,
+# /api/exit, /api/compact) when the dashboard is reachable from the LAN.
+# Read-only endpoints are always open. Stored as the "viewport_token" key in
+# settings.json (gitignored, never in the public repo, never returned by
+# get_settings — it's a sibling key, not part of the numeric CFG dict).
+# Empty/None = token disabled (default — desktop-only, public-safe).
+TOKEN_KEY = "viewport_token"
+TOKEN_HEADER = "X-Viewport-Token"
+
+def _read_token_file():
+    try:
+        with open(os.path.join(HERE, "settings.json"), encoding="utf-8") as f:
+            d = json.loads(f.read())
+        v = d.get(TOKEN_KEY)
+        return v if isinstance(v, str) and v.strip() else None
+    except Exception:
+        return None
+
+def _write_token_file(tok):
+    try:
+        d = {}
+        with open(os.path.join(HERE, "settings.json"), encoding="utf-8") as f:
+            d = json.loads(f.read())
+    except Exception:
+        d = {}
+    if tok:
+        d[TOKEN_KEY] = tok
+    else:
+        d.pop(TOKEN_KEY, None)
+    with open(os.path.join(HERE, "settings.json"), "w", encoding="utf-8") as f:
+        f.write(json.dumps(d, indent=2) + "\n")
+
+def token_enabled():
+    return bool(_read_token_file())
+
+def check_write_token(headers) -> bool:
+    """True if the request is allowed to hit a write endpoint.
+
+    If no token is configured (desktop-only default) -> allow (back-compat).
+    Otherwise the X-Viewport-Token header must match (constant-time compare).
+    """
+    expected = _read_token_file()
+    if not expected:
+        return True
+    supplied = (headers.get(TOKEN_HEADER) or "").strip()
+    if not supplied:
+        return False
+    return hmac.compare_digest(supplied, expected)
+
+def _resolve_bind():
+    """Bind address: VIEWPORT_BIND env wins; else 'bind' in settings.json;
+    else the 127.0.0.1 default. Only '0.0.0.0' is accepted as a non-local bind."""
+    env = os.environ.get("VIEWPORT_BIND")
+    if env:
+        return env
+    try:
+        with open(os.path.join(HERE, "settings.json"), encoding="utf-8") as f:
+            b = (json.loads(f.read()).get("bind") or "").strip()
+    except Exception:
+        b = ""
+    if b in ("0.0.0.0", "127.0.0.1"):
+        return b
+    return BIND_HOST
 
 # Where to find the `lms` CLI. Order: PATH, then the standard per-OS LM Studio
 # locations, then a $LMSTUDIO_BIN override. No user-specific paths — portable.
@@ -1167,6 +1282,27 @@ def totals():
             "frontier_cost": round(frontier_cost, 2), "saved": round(saved, 2)}
 
 
+def _lan_url():
+    """Best-effort LAN URL (first non-loopback IPv4) for the phone/LAN card."""
+    import socket
+    ip = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))   # no packets sent; just picks the egress IP
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            ip = None
+    return ("http://%s:%d" % (ip, PORT)) if ip else None
+
+def lan_info():
+    """Read-only: LAN reachability + whether the write-token is on. NO secret."""
+    return {"lan_url": _lan_url(), "bound": _resolve_bind(), "port": PORT,
+            "token_enabled": token_enabled(), "asof": time.time()}
+
 def data_sizes():
     """Live file sizes + archive size + retention setting (for the data panel)."""
     def _sz(p):
@@ -1369,6 +1505,8 @@ def api_payload(route, method, body=None):
         return get_settings()
     if route == "/api/data":
         return data_sizes()
+    if route == "/api/lan":
+        return lan_info()
     if route == "/api/compact":
         if method != "POST":
             raise ApiError(405, "compact is POST")
@@ -1449,6 +1587,35 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         Handler.path = self.path
+        # Flavor B: the 3 write endpoints are token-gated. If a token is
+        # configured (LAN mode) the X-Viewport-Token header must match.
+        # Read-only endpoints (and the desktop-only default, no token) pass.
+        if self.path in ("/api/settings", "/api/exit", "/api/compact", "/api/lan"):
+            expected = _read_token_file()
+            if expected:
+                supplied = (self.headers.get(TOKEN_HEADER) or "").strip()
+                if not supplied:
+                    self._json(401, {"error": "token required (X-Viewport-Token)"})
+                    return
+                if not hmac.compare_digest(supplied, expected):
+                    self._json(403, {"error": "invalid token"})
+                    return
+        if self.path == "/api/lan":
+            # set/clear the write token + LAN bind (token-gated once one is set)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n) if n else b""
+                d = json.loads(body.decode("utf-8")) if body else {}
+            except Exception:
+                d = {}
+            enable_lan = d.get("enable_lan")
+            if enable_lan is not None and not isinstance(enable_lan, bool):
+                enable_lan = None
+            try:
+                self._json(200, set_lan_token(d.get("token"), enable_lan))
+            except Exception as e:
+                self._json(500, {"error": str(e)})
+            return
         if self.path == "/api/settings":
             try:
                 n = int(self.headers.get("Content-Length") or 0)
@@ -1502,8 +1669,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     global _SERVER
-    log("=== viewport v2 starting on 127.0.0.1:%d (lms=%s, psutil=%s) ==="
-        % (PORT, LMS, bool(psutil)))
+    bind = _resolve_bind()
+    log("=== viewport v2 starting on %s:%d (lms=%s, psutil=%s) ==="
+        % (bind, PORT, LMS, bool(psutil)))
     _load_settings()   # apply any user-tweaked knobs from settings.json
     ensure_ledger()    # seed the durable all-time ledger once (idempotent)
     for tgt, name in [(model_stream_loop, "model-stream"),
@@ -1512,9 +1680,9 @@ def main():
                       (rolling_sampler, "rolling"),
                       (lifetime_sampler, "lifetime")]:
         threading.Thread(target=tgt, daemon=True, name=name).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv = ThreadingHTTPServer((bind, PORT), Handler)
     _SERVER = srv
-    log("listening on 127.0.0.1:%d" % PORT)
+    log("listening on %s:%d" % (bind, PORT))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
