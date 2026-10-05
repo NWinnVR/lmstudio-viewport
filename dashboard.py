@@ -64,7 +64,7 @@ BIND_HOST = os.environ.get("VIEWPORT_BIND", "127.0.0.1")
 # Single source of truth for the release version (semver). Bump here; it is
 # surfaced via /api/status and in the README. Policy: minor bump for fixes/adds,
 # major only on explicit intent.
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
 LIFETIME = os.path.join(HERE, "lifetime.jsonl")
@@ -1191,44 +1191,50 @@ def history(days=7):
     """Per-day rollup: generation stats (from history.jsonl) + hardware/energy
     averages (from lifetime.jsonl) + the money breakdown ($ spent, $ active,
     $ saved) + active time (model actually working)."""
-    if not os.path.exists(HISTORY):
-        return []
     cutoff = time.time() - days * 86400
     dm = {}
-    with open(HISTORY, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            ts = ev.get("ts") or 0
-            if ts < cutoff:
-                continue
-            day = time.strftime("%Y-%m-%d", time.localtime(ts))
-            r = dm.setdefault(day, {"gens": 0, "tokens": 0, "tokens_out": 0,
-                                    "tps_sum": 0.0, "ttft_sum": 0.0, "n_tps": 0,
-                                    "n_ttft": 0, "peak": 0.0})
-            if ev.get("tps") is not None:
-                r["gens"] += 1
-                r["tps_sum"] += ev["tps"]
-                r["n_tps"] += 1
-                r["peak"] = max(r["peak"], ev["tps"])
-            if ev.get("pred"):
-                r["tokens"] += ev["pred"]
-                r["tokens_out"] += ev["pred"]
-            if ev.get("ttft") is not None:
-                r["ttft_sum"] += ev["ttft"]
-                r["n_ttft"] += 1
+    if os.path.exists(HISTORY):
+        with open(HISTORY, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                ts = ev.get("ts") or 0
+                if ts < cutoff:
+                    continue
+                day = time.strftime("%Y-%m-%d", time.localtime(ts))
+                r = dm.setdefault(day, {"gens": 0, "tokens": 0, "tokens_out": 0,
+                                        "tps_sum": 0.0, "ttft_sum": 0.0, "n_tps": 0,
+                                        "n_ttft": 0, "peak": 0.0})
+                if ev.get("tps") is not None:
+                    r["gens"] += 1
+                    r["tps_sum"] += ev["tps"]
+                    r["n_tps"] += 1
+                    r["peak"] = max(r["peak"], ev["tps"])
+                if ev.get("pred"):
+                    r["tokens"] += ev["pred"]
+                    r["tokens_out"] += ev["pred"]
+                if ev.get("ttft") is not None:
+                    r["ttft_sum"] += ev["ttft"]
+                    r["n_ttft"] += 1
     ld = _lifetime_by_day()
+    # Window the 24/7 power data the same way (drop days older than the cutoff).
+    ld = {d: v for d, v in ld.items() if d >= time.strftime("%Y-%m-%d", time.localtime(cutoff))}
+    # Union of both logs: a row for EVERY day with data, not just LLM days.
+    # Days with no generation stats get a zero row (power/energy still real).
+    all_days = set(dm) | set(ld)
     rate = CFG.get("cost_per_kwh", COST_PER_KWH)
     idle = CFG.get("idle_power_w", IDLE_POWER_W)
     fout = CFG.get("frontier_out", FRONTIER_OUT)
     out = []
-    for day in sorted(dm):
-        r = dm[day]
+    for day in sorted(all_days):
+        r = dm.get(day) or {"gens": 0, "tokens": 0, "tokens_out": 0,
+                            "tps_sum": 0.0, "ttft_sum": 0.0, "n_tps": 0,
+                            "n_ttft": 0, "peak": 0.0}
         L = ld.get(day, {"gpu_util": [], "vram_pct": [], "power_w": [],
                          "cpu_util": [], "ram_pct": [], "cpu_w": [], "series": []})
         def _avg(xs):
