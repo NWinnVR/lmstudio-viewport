@@ -64,7 +64,7 @@ BIND_HOST = os.environ.get("VIEWPORT_BIND", "127.0.0.1")
 # Single source of truth for the release version (semver). Bump here; it is
 # surfaced via /api/status and in the README. Policy: minor bump for fixes/adds,
 # major only on explicit intent.
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 HERE = os.path.dirname(os.path.abspath(__file__))
 HISTORY = os.path.join(HERE, "history.jsonl")
 LIFETIME = os.path.join(HERE, "lifetime.jsonl")
@@ -1783,18 +1783,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json(500, {"error": str(e)})
 
     def _maybe_static(self, path):
-        """Serve a whitelisted static asset (.js/.css) from HERE.
+        """Serve a whitelisted static asset (.js/.css/.ico/.png) from HERE.
 
         Traversal-guarded: the resolved path must stay inside HERE and the
         extension must be one we allow. Returns True if handled. (The charts
-        are now self-contained SVG — no external JS/CSS is loaded — so this
-        is a generic fallback kept in case a static asset is ever added.)
+        are self-contained SVG — no external JS/CSS is loaded — so this is a
+        generic fallback for the favicon and any future static asset.)
         """
         name = os.path.basename(path)
         if not name or name == path:      # no real filename (e.g. "/")
             return False
         ext = os.path.splitext(name)[1].lower()
-        if ext not in (".js", ".css"):
+        if ext not in (".js", ".css", ".ico", ".png"):
             return False
         full = os.path.realpath(os.path.join(HERE, name))
         root = os.path.realpath(HERE)
@@ -1808,7 +1808,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found: %s" % name})
             return True
         ctype = {".js": "application/javascript; charset=utf-8",
-                 ".css": "text/css; charset=utf-8"}[ext]
+                 ".css": "text/css; charset=utf-8",
+                 ".ico": "image/x-icon",
+                 ".png": "image/png"}[ext]
         self._send(200, data, ctype)
         return True
 

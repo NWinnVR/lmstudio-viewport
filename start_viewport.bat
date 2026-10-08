@@ -11,8 +11,18 @@ setlocal
 cd /d "%~dp0"
 
 rem pick a python (watchdog uses sys.executable for the dashboard itself)
-set "VPY=pythonw"
-where pythonw >nul 2>nul || set "VPY=python"
+rem Prefer the Hermes 3.11 venv pythonw — it has psutil, so the system-RAM tile
+rem works. Fall back to PATH pythonw, then python. (After a Hermes update the
+rem PATH pythonw can resolve to a tools python that lacks psutil — the RAM tile
+rem would silently hide. psutil is optional, the dashboard still runs without it.)
+set "VPY="
+if exist "%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\pythonw.exe" (
+  set "VPY=%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\pythonw.exe"
+)
+if not defined VPY (
+  where pythonw >nul 2>nul && set "VPY=pythonw"
+)
+if not defined VPY set "VPY=python"
 
 rem already serving? -> just open the browser, done
 netstat -ano | findstr "LISTENING" | findstr ":18022 " >nul

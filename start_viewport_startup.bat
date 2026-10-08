@@ -17,13 +17,15 @@ rem ─────────────────────────�
 setlocal
 cd /d "%~dp0"
 
-rem pick a windowless python: prefer PATH pythonw, fall back to the Hermes venv
+rem pick a windowless python: prefer the Hermes 3.11 venv (has psutil -> RAM tile),
+rem fall back to PATH pythonw (which after a Hermes update may resolve to a
+rem tools python lacking psutil — the RAM tile would silently hide)
 set "VPY="
-where pythonw >nul 2>nul && set "VPY=pythonw"
+if exist "%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\pythonw.exe" (
+  set "VPY=%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\pythonw.exe"
+)
 if not defined VPY (
-  if exist "%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\pythonw.exe" (
-    set "VPY=%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\pythonw.exe"
-  )
+  where pythonw >nul 2>nul && set "VPY=pythonw"
 )
 if not defined VPY (
   echo [!] No pythonw found on PATH or in the Hermes venv. Skipping viewport start.
