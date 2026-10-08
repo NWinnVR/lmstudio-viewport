@@ -122,7 +122,7 @@ def holder_live(holder) -> bool:
             r = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-Command",
                  "exit (0 if (Get-Process -Id %d -EA SilentlyContinue) else 1)" % holder],
-                capture_output=True, stdin=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
             return r.returncode == 0
         except Exception:
